@@ -189,25 +189,25 @@ for sym in ["cough", "sore throat", "dysuria_uti", "dysuria_sti", "genital disch
         red_flag_rules[sym] = {"threshold": 3, "triggers": [(2, ["severe", "worsening", "cannot cope", "unbearable"]), (1, ["fever", "blood", "vomiting"])]}
 
 red_flag_messages = {
-    "headache_sah": "🚨 RED FLAG: Your symptoms may indicate a serious neurological emergency such as a subarachnoid haemorrhage or meningitis. Please call 999/112 or go to your nearest emergency department immediately.",
+    "headache_sah": "🚨 RED FLAG: Your symptoms may indicate a serious neurological emergency such as a subarachnoid haemorrhage or meningitis. Please call 911 or go to your nearest emergency department immediately.",
     "headache_migraine": "⚠️ ATTENTION: While this may be a migraine, some features warrant same-day medical review. Please contact your GP or urgent care today.",
-    "chest pain_cardiac": "🚨 RED FLAG: Your symptoms are consistent with a possible cardiac event such as a heart attack. Please call 999/112 immediately. Do not drive yourself.",
+    "chest pain_cardiac": "🚨 RED FLAG: Your symptoms are consistent with a possible cardiac event such as a heart attack. Please call 911 immediately. Do not drive yourself.",
     "chest pain_non_cardiac": "⚠️ ATTENTION: Your chest pain requires prompt assessment. Please seek medical attention today.",
-    "shortness of breath": "🚨 RED FLAG: Severe breathing difficulty can be life-threatening. Please call 999/112 or go to your nearest emergency department immediately.",
+    "shortness of breath": "🚨 RED FLAG: Severe breathing difficulty can be life-threatening. Please call 911 or go to your nearest emergency department immediately.",
     "seizure": "🚨 RED FLAG: A seizure — especially a first seizure or prolonged seizure — requires urgent evaluation. Please go to your nearest emergency department.",
     "head injury": "🚨 RED FLAG: Your head injury requires urgent assessment for possible concussion or intracranial injury. Please go to your nearest emergency department.",
-    "trauma": "🚨 RED FLAG: Based on your description, this injury requires immediate emergency attention. Please call 999/112.",
-    "blackout_hypogly": "🚨 RED FLAG: A hypoglycaemic episode requires immediate treatment. If you cannot take glucose by mouth, call 999/112 now.",
+    "trauma": "🚨 RED FLAG: Based on your description, this injury requires immediate emergency attention. Please call 911.",
+    "blackout_hypogly": "🚨 RED FLAG: A hypoglycaemic episode requires immediate treatment. If you cannot take glucose by mouth, call 911 now.",
     "blackout_cardiac": "🚨 RED FLAG: Loss of consciousness may indicate a serious cardiac or neurological cause. Please go to your nearest emergency department immediately.",
     "rectal bleed": "🚨 RED FLAG: Significant rectal bleeding requires urgent assessment. Please go to your nearest emergency department immediately.",
-    "suicidal thoughts": "🚨 URGENT: You are not alone and help is here. Please call 999/112 now, or contact the Samaritans on 116 123 (free, 24/7). A clinician wants to support you through this.",
-    "overdose": "🚨 RED FLAG: This is a medical emergency. Please call 999/112 immediately. Do not wait for symptoms to worsen.",
+    "suicidal thoughts": "🚨 URGENT: You are not alone and help is here. Please call 911 now, or contact the Samaritans on 116 123 (free, 24/7). A clinician wants to support you through this.",
+    "overdose": "🚨 RED FLAG: This is a medical emergency. Please call 911 immediately. Do not wait for symptoms to worsen.",
     "diarrhea": "⚠️ ATTENTION: Your symptoms suggest possible serious infection or dehydration. Please seek medical attention today.",
-    "other": "🚨 RED FLAG: Based on your symptoms, please seek emergency care immediately or call 999/112."
+    "other": "🚨 RED FLAG: Based on your symptoms, please seek emergency care immediately or call 911."
 }
 
 completion_messages = {
-    "high": "🚨 URGENT: Based on everything you have described, your symptoms require immediate emergency attention. Please call 999/112 or go to your nearest emergency department NOW. Do not wait.",
+    "high": "🚨 URGENT: Based on everything you have described, your symptoms require immediate emergency attention. Please call 911 or go to your nearest emergency department NOW. Do not wait.",
     "medium": "⚠️ ATTENTION: Based on your symptoms, we recommend you seek medical attention today. Please contact your GP urgently or go to an urgent care centre.",
     "low": "✅ Thank you for the information. Your responses have been recorded. Please contact your GP or a healthcare professional for further assessment."
 }
