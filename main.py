@@ -89,6 +89,14 @@ UNIVERSAL_INTAKE = [
 ]
 NUM_UNIVERSAL = len(UNIVERSAL_INTAKE)
 
+# Pathways that trigger a red flag the moment they are confirmed by branching
+# regardless of keyword scores — the branch answer itself implies danger
+INSTANT_RED_FLAG_PATHWAYS = {
+    "headache_sah",          # confirmed thunderclap/worst ever headache
+    "chest pain_cardiac",    # confirmed cardiac-type chest pain
+    "blackout_cardiac",      # confirmed cardiac syncope
+}
+
 HEADACHE_INITIAL = "On a scale of 1 to 10, how severe is this headache?"
 HEADACHE_BRANCH_Q = "Is this the worst headache you have ever had, or did it come on suddenly like an explosion or thunderclap?"
 HEADACHE_SAH_QUESTIONS = ["Do you have any neck stiffness or pain on bending your neck forward?", "Do you have sensitivity to light or does light make it worse?", "Do you have any fever, confusion, or feel unusually drowsy?", "Did the headache reach maximum intensity within seconds to a couple of minutes?", "Do you have any nausea or vomiting with this headache?", "Have you had any recent illness, infection, or been around anyone unwell?"]
@@ -418,11 +426,11 @@ def triage(symptom: SymptomInput):
         early_rf, early_rl = check_red_flags(all_answers, early_pathway)
         early_rfm = red_flag_messages.get(early_pathway) if early_rf else None
 
-        # If patient confirmed thunderclap/worst ever headache, force red flag immediately
-        if current_pathway == "headache_sah" and not early_rf:
+        # Force red flag for pathways that are dangerous the moment they are confirmed
+        if current_pathway in INSTANT_RED_FLAG_PATHWAYS and not early_rf:
             early_rf = True
             early_rl = "high"
-            early_rfm = red_flag_messages.get("headache_sah")
+            early_rfm = red_flag_messages.get(current_pathway)
 
         if idx <= offset:
             return {"symptom_type": symptom_key, "question_index": offset + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
