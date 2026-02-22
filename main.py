@@ -1059,11 +1059,11 @@ def triage(symptom: SymptomInput):
 
     all_answers.append(AnswerEntry(question=current_question, answer=symptom.message))
 
-    def make_response(next_q, q_index, pathway_override=None, transition=None):
+    def make_response(next_q, q_index, pathway_override=None, transition=None, show_diffs=False):
         p = pathway_override or current_pathway
         rf, rl = check_red_flags(all_answers, resolve_pathway(symptom_key, p))
         rfm = red_flag_messages.get(resolve_pathway(symptom_key, p)) if rf else None
-        diffs = generate_differentials(resolve_pathway(symptom_key, p), all_answers)
+        diffs = generate_differentials(resolve_pathway(symptom_key, p), all_answers) if show_diffs else []
         return {
             "symptom_type": symptom_key,
             "question_index": q_index,
@@ -1100,12 +1100,12 @@ def triage(symptom: SymptomInput):
             # Universal done — ask branch question or go straight to pathway
             branch_q = get_branch_question(symptom_key)
             if branch_q:
-                return make_response(branch_q, BRANCH_START)
+                return make_response(branch_q, BRANCH_START, show_diffs=True)
             # No branch — jump to first pathway question
             pathway = resolve_pathway(symptom_key, current_pathway)
             questions = QUESTION_MAP.get(pathway, QUESTION_MAP.get(symptom_key, []))
             if questions:
-                return make_response(questions[0], PATHWAY_START + 1)
+                return make_response(questions[0], PATHWAY_START + 1, show_diffs=True)
 
     # --- Step D: Branch question answered — determine pathway ---
     if not current_pathway and has_branch and idx >= BRANCH_START:
