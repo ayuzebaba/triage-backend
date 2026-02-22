@@ -168,7 +168,7 @@ QUESTION_MAP = {
 
 red_flag_rules = {
     "headache_sah": {"threshold": 2, "triggers": [(3, ["worst headache", "thunderclap", "sudden severe", "explosive"]), (2, ["neck stiffness", "stiff neck", "cannot bend neck"]), (2, ["sensitivity to light", "photophobia", "light hurts"]), (2, ["confusion", "confused", "drowsy", "altered"]), (2, ["fever", "high temperature"]), (1, ["vomiting", "nausea"])]},
-    "headache_migraine": {"threshold": 3, "triggers": [(2, ["neck stiffness", "stiff neck", "fever"]), (1, ["first time", "never had this before", "unusual for me"])]},
+    "headache_migraine": {"threshold": 2, "triggers": [(3, ["neck stiffness", "stiff neck", "fever"]), (2, ["first time", "never had before", "never had this before", "no i have not", "no never", "first ever"]), (2, ["getting worse", "worse", "worsening"]), (1, ["vomiting", "nausea", "confusion"])]},
     "chest pain_cardiac": {"threshold": 2, "triggers": [(3, ["heart attack", "cardiac arrest"]), (2, ["radiating to arm", "left arm", "jaw pain", "radiating to jaw"]), (2, ["shortness of breath", "can't breathe", "difficulty breathing"]), (2, ["sweating", "cold sweat", "clammy"]), (2, ["fainted", "syncope", "passed out"]), (1, ["crushing", "pressure", "squeezing", "heavy"]), (1, ["palpitations", "heart racing", "irregular"])]},
     "chest pain_non_cardiac": {"threshold": 3, "triggers": [(2, ["blood clot", "dvt", "pe", "pulmonary embolism"]), (2, ["cannot breathe", "severe shortness of breath"]), (1, ["fever", "cough", "pleuritic"])]},
     "shortness of breath": {"threshold": 2, "triggers": [(3, ["cannot breathe at all", "turning blue", "lips blue", "cyanosis"]), (2, ["chest pain", "chest tightness"]), (2, ["sudden onset", "came on suddenly"]), (2, ["blood clot", "pe", "pulmonary embolism"]), (1, ["worsening", "getting worse", "severe"])]},
@@ -407,7 +407,10 @@ def triage(symptom: SymptomInput):
 
     # --- Phase B: after initial, ask branch question if not yet asked ---
     if has_initial and has_branch and idx == 1:
-        return {"symptom_type": symptom_key, "question_index": 2, "phase": "triage", "next_question": get_branch_question(symptom_key), "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+        b_pathway = resolve_pathway(symptom_key, current_pathway)
+        b_rf, b_rl = check_red_flags(all_answers, b_pathway)
+        b_rfm = red_flag_messages.get(b_pathway) if b_rf else None
+        return {"symptom_type": symptom_key, "question_index": 2, "phase": "triage", "next_question": get_branch_question(symptom_key), "red_flag": b_rf, "red_flag_message": b_rfm, "risk_level": b_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
 
     # --- Phase C: resolve pathway from branch answer ---
     if not current_pathway and has_branch:
