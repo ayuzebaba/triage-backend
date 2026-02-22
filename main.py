@@ -1023,123 +1023,91 @@ def triage(symptom: SymptomInput):
     # after universals = branch question (if exists)
     # after branch = pathway-specific questions
 
-    INITIAL_OFFSET = 1 if has_initial else 0
-    UNIVERSAL_START = INITIAL_OFFSET + 1   # idx at which first universal q is asked
-    BRANCH_START = UNIVERSAL_START + NUM_UNIVERSAL
-    PATHWAY_START = BRANCH_START + (1 if has_branch else 0)
+    # Simple fixed layout — same for every symptom:
+    # idx 0 = initial complaint (patient types symptoms)
+    # idx 1 = symptom clarifying q IF exists, else "when did it start"
+    # idx 2 = "when did it start" (if clarifying q existed) OR "better/worse/same"
+    # idx 3 = "better/worse/same" OR "had before?"
+    # idx 4 = "had before?" OR branch q / first pathway q
+    # ...and so on
+    #
+    # So universal questions always occupy 3 consecutive slots.
+    # UNIVERSAL_START = 2 if has_initial else 1
+    # BRANCH_START    = UNIVERSAL_START + 3
+    # PATHWAY_START   = BRANCH_START + (1 if has_branch else 0)
 
-    # Record what question was just answered
+    UNIVERSAL_START = 2 if has_initial else 1
+    BRANCH_START    = UNIVERSAL_START + NUM_UNIVERSAL   # = UNIVERSAL_START + 3
+    PATHWAY_START   = BRANCH_START + (1 if has_branch else 0)
+
+    # Record what question was just answered for history
     current_question = ""
-    if idx == 1 and has_initial:
-        current_question = get_initial_question(symptom_key)
+    if has_initial and idx == 1:
+        current_question = get_initial_question(symptom_key) or ""
     elif UNIVERSAL_START <= idx < BRANCH_START:
-        u_idx = idx - UNIVERSAL_START
-        if 0 <= u_idx - 1 < NUM_UNIVERSAL:
-            current_question = UNIVERSAL_INTAKE[u_idx - 1]
-    elif idx == BRANCH_START and has_branch:
+        u_idx = idx - UNIVERSAL_START - 1
+        if 0 <= u_idx < NUM_UNIVERSAL:
+            current_question = UNIVERSAL_INTAKE[u_idx]
+    elif has_branch and idx == BRANCH_START:
         current_question = get_branch_question(symptom_key) or ""
-    else:
+    elif idx > BRANCH_START:
         pathway = resolve_pathway(symptom_key, current_pathway)
         questions = QUESTION_MAP.get(pathway, QUESTION_MAP.get(symptom_key, []))
-        q_idx = idx - PATHWAY_START
-        if 0 <= q_idx - 1 < len(questions):
-            current_question = questions[q_idx - 1]
+        q_idx = idx - PATHWAY_START - 1
+        if 0 <= q_idx < len(questions):
+            current_question = questions[q_idx]
 
     all_answers.append(AnswerEntry(question=current_question, answer=symptom.message))
 
-    # --- Step A: idx == 0 — patient just described complaint ---
-    if idx == 0:
-        # Ask symptom-specific initial clarifying question first if it exists
-        initial_q = get_initial_question(symptom_key)
-        if initial_q:
-            return {
-                "symptom_type": symptom_key,
-                "question_index": 1,
-                "phase": "triage",
-                "next_question": initial_q,
-                "red_flag": False,
-                "red_flag_message": None,
-                "risk_level": "low",
-                "detected_symptoms": detected_symptoms,
-                "triaged_symptoms": triaged_symptoms,
-                "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": []
-            }
-        else:
-            # No initial q — go straight to first universal question
-            return {
-                "symptom_type": symptom_key,
-                "question_index": UNIVERSAL_START,
-                "phase": "triage",
-                "next_question": UNIVERSAL_INTAKE[0],
-                "red_flag": False,
-                "red_flag_message": None,
-                "risk_level": "low",
-                "detected_symptoms": detected_symptoms,
-                "triaged_symptoms": triaged_symptoms,
-                "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": []
-            }
-
-    # --- Step B: After initial clarifying q, ask universal questions ---
-    if has_initial and idx == 1:
-        # Just answered initial clarifying q — now start universal intake
+    def make_response(next_q, q_index, pathway_override=None, transition=None):
+        p = pathway_override or current_pathway
+        rf, rl = check_red_flags(all_answers, resolve_pathway(symptom_key, p))
+        rfm = red_flag_messages.get(resolve_pathway(symptom_key, p)) if rf else None
+        diffs = generate_differentials(resolve_pathway(symptom_key, p), all_answers)
         return {
             "symptom_type": symptom_key,
-            "question_index": UNIVERSAL_START,
+            "question_index": q_index,
             "phase": "triage",
-            "next_question": UNIVERSAL_INTAKE[0],
-            "red_flag": False,
-            "red_flag_message": None,
-            "risk_level": "low",
+            "next_question": next_q,
+            "red_flag": rf,
+            "red_flag_message": rfm,
+            "risk_level": rl,
             "detected_symptoms": detected_symptoms,
             "triaged_symptoms": triaged_symptoms,
-            "current_pathway": current_pathway,
-            "transition_message": None,
-            "differential_diagnoses": []
+            "current_pathway": p,
+            "transition_message": transition,
+            "differential_diagnoses": diffs
         }
 
-    # --- Step C: Still in universal intake questions ---
+    # --- Step A: idx == 0 — patient just described complaint ---
+    if idx == 0:
+        if has_initial:
+            return make_response(get_initial_question(symptom_key), 1)
+        else:
+            return make_response(UNIVERSAL_INTAKE[0], UNIVERSAL_START)
+
+    # --- Step B: idx == 1 and has_initial — just answered clarifying q ---
+    if has_initial and idx == 1:
+        return make_response(UNIVERSAL_INTAKE[0], UNIVERSAL_START)
+
+    # --- Step C: Universal intake questions ---
     if UNIVERSAL_START <= idx < BRANCH_START:
-        u_idx = idx - UNIVERSAL_START  # 0-based index into UNIVERSAL_INTAKE
+        u_idx = idx - UNIVERSAL_START   # 0-based: 0=just asked Q1, asking Q2 now
         next_u = get_universal_question(u_idx + 1)
         if next_u:
-            return {
-                "symptom_type": symptom_key,
-                "question_index": idx + 1,
-                "phase": "triage",
-                "next_question": next_u,
-                "red_flag": False,
-                "red_flag_message": None,
-                "risk_level": "low",
-                "detected_symptoms": detected_symptoms,
-                "triaged_symptoms": triaged_symptoms,
-                "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": []
-            }
+            return make_response(next_u, idx + 1)
         else:
-            # Universal intake done — ask branch question if exists
+            # Universal done — ask branch question or go straight to pathway
             branch_q = get_branch_question(symptom_key)
             if branch_q:
-                return {
-                    "symptom_type": symptom_key,
-                    "question_index": BRANCH_START,
-                    "phase": "triage",
-                    "next_question": branch_q,
-                    "red_flag": False,
-                    "red_flag_message": None,
-                    "risk_level": "low",
-                    "detected_symptoms": detected_symptoms,
-                    "triaged_symptoms": triaged_symptoms,
-                    "current_pathway": None,
-                    "transition_message": None,
-                    "differential_diagnoses": []
-                }
+                return make_response(branch_q, BRANCH_START)
+            # No branch — jump to first pathway question
+            pathway = resolve_pathway(symptom_key, current_pathway)
+            questions = QUESTION_MAP.get(pathway, QUESTION_MAP.get(symptom_key, []))
+            if questions:
+                return make_response(questions[0], PATHWAY_START + 1)
 
-    # --- Step D: Branch question response — determine pathway ---
+    # --- Step D: Branch question answered — determine pathway ---
     if not current_pathway and has_branch and idx >= BRANCH_START:
         branch_q = get_branch_question(symptom_key)
         branch_answer = None
