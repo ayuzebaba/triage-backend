@@ -418,6 +418,12 @@ def triage(symptom: SymptomInput):
         early_rf, early_rl = check_red_flags(all_answers, early_pathway)
         early_rfm = red_flag_messages.get(early_pathway) if early_rf else None
 
+        # If patient confirmed thunderclap/worst ever headache, force red flag immediately
+        if current_pathway == "headache_sah" and not early_rf:
+            early_rf = True
+            early_rl = "high"
+            early_rfm = red_flag_messages.get("headache_sah")
+
         if idx <= offset:
             return {"symptom_type": symptom_key, "question_index": offset + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
 
