@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 app = FastAPI()
 
@@ -36,10 +36,11 @@ class SymptomInput(BaseModel):
     detected_symptoms: Optional[List[str]] = []
     triaged_symptoms: Optional[List[str]] = []
     risk_score: Optional[int] = 0
-    current_pathway: Optional[str] = None
+    current_pathway: Optional[str] = None  # tracks branched pathway e.g. "headache_sah" vs "headache_migraine"
 
 # ------------------------------
 # Presenting symptom keywords
+# (what the PATIENT says, not diagnoses)
 # ------------------------------
 SYMPTOM_KEYWORDS = {
     "headache": [
@@ -112,7 +113,7 @@ SYMPTOM_KEYWORDS = {
         "cannot hold urine", "urgency to urinate", "urge to urinate"
     ],
     "genital discharge": [
-        "discharge", "unusual discharge", "genital discharge",
+        "discharge", "unusual discharge", "penile discharge", "vaginal discharge",
         "discharge from genitals", "fluid from genitals", "abnormal discharge"
     ],
     "genital sore": [
@@ -143,6 +144,9 @@ SYMPTOM_KEYWORDS = {
     ],
 }
 
+# ------------------------------
+# Symptom groupings for clinical logic
+# ------------------------------
 EMERGENCY_SYMPTOMS = {
     "headache", "chest pain", "seizure", "head injury", "trauma",
     "blackout", "rectal bleed", "suicidal thoughts", "overdose", "shortness of breath",
@@ -155,10 +159,17 @@ NON_EMERGENCY_SYMPTOMS = {
     "migraine", "abdominal pain", "diarrhea"
 }
 
+# Symptoms that cluster into genitourinary / sexual health
 GU_CLUSTER = {"dysuria", "urinary frequency", "genital discharge", "genital sore", "dyspareunia"}
+
+# Symptoms that cluster into genitourinary / UTI
 UTI_CLUSTER = {"dysuria", "urinary frequency"}
+
 BENIGN_MODIFIER = -1
 
+# ------------------------------
+# Affirmative / negative detectors
+# ------------------------------
 affirmative_answers = [
     "yes", "yeah", "yep", "yup", "correct", "absolutely", "definitely",
     "i do", "i have", "i am", "it is", "that's right", "thats right",
@@ -179,11 +190,16 @@ def is_negative(answer: str) -> bool:
     return any(a.startswith(w) or a == w for w in negative_answers)
 
 # ------------------------------
-# Branching questions
+# BRANCHING DECISION TREES
+# Each node: { question, yes_path, no_path, score_if_yes, score_if_no }
+# Pathways are lists of questions with dynamic branching
 # ------------------------------
+
+# HEADACHE — thunderclap vs migraine vs tension
 HEADACHE_INITIAL = "On a scale of 1 to 10, how severe is this headache?"
 HEADACHE_BRANCH_Q = "Is this the worst headache you have ever had, or did it come on suddenly like an explosion or thunderclap?"
 
+# SAH / Meningitis pathway
 HEADACHE_SAH_QUESTIONS = [
     "Do you have any neck stiffness or pain on bending your neck forward?",
     "Do you have sensitivity to light or does light make it worse?",
@@ -193,6 +209,7 @@ HEADACHE_SAH_QUESTIONS = [
     "Have you had any recent illness, infection, or been around anyone unwell?"
 ]
 
+# Migraine / tension pathway
 HEADACHE_MIGRAINE_QUESTIONS = [
     "Is the pain on one side of your head or both sides?",
     "Do you have any visual disturbances, flashing lights, or blind spots before the headache?",
@@ -202,6 +219,7 @@ HEADACHE_MIGRAINE_QUESTIONS = [
     "Do you have any neck stiffness or fever alongside this headache?"
 ]
 
+# CHEST PAIN — cardiac vs non-cardiac branching
 CHEST_PAIN_INITIAL = "Can you describe the chest pain — is it sharp, dull, pressure-like, or burning?"
 CHEST_BRANCH_Q = "Does the pain feel like pressure, tightness, squeezing, or a heavy weight on your chest?"
 
@@ -223,6 +241,7 @@ CHEST_NON_CARDIAC_QUESTIONS = [
     "Do you have any shortness of breath or difficulty breathing?"
 ]
 
+# SHORTNESS OF BREATH
 SOB_QUESTIONS = [
     "Did the shortness of breath come on suddenly or gradually?",
     "Do you have any chest pain or tightness alongside this?",
@@ -232,6 +251,7 @@ SOB_QUESTIONS = [
     "Are you breathless at rest right now, or only on exertion?"
 ]
 
+# SEIZURE
 SEIZURE_QUESTIONS = [
     "Is this the first seizure you have ever had?",
     "How long did the seizure last?",
@@ -241,6 +261,7 @@ SEIZURE_QUESTIONS = [
     "Did you injure yourself during the seizure?"
 ]
 
+# HEAD INJURY
 HEAD_INJURY_QUESTIONS = [
     "Did you lose consciousness after the head injury?",
     "Do you remember the event, or do you have any memory loss around it?",
@@ -250,6 +271,7 @@ HEAD_INJURY_QUESTIONS = [
     "Are you on any blood thinners such as warfarin or aspirin?"
 ]
 
+# TRAUMA
 TRAUMA_QUESTIONS = [
     "What happened — can you briefly describe the mechanism of injury?",
     "Where on your body were you injured?",
@@ -259,6 +281,7 @@ TRAUMA_QUESTIONS = [
     "Can you move all your limbs and do you have normal sensation?"
 ]
 
+# BLACKOUT
 BLACKOUT_BRANCH_Q = "Are you diabetic or do you have a history of low blood sugar?"
 
 BLACKOUT_HYPOGLY_QUESTIONS = [
@@ -278,6 +301,7 @@ BLACKOUT_CARDIAC_QUESTIONS = [
     "Have you had episodes like this before?"
 ]
 
+# RECTAL BLEED
 RECTAL_BLEED_QUESTIONS = [
     "How much blood did you notice — a small amount or a large amount?",
     "What colour was the blood — bright red, dark red, or black and tarry?",
@@ -287,6 +311,7 @@ RECTAL_BLEED_QUESTIONS = [
     "Have you had any recent changes in bowel habit, unintentional weight loss, or night sweats?"
 ]
 
+# SUICIDAL THOUGHTS — handled with clinical care
 SUICIDE_QUESTIONS = [
     "I want to make sure you are safe right now. Are you currently having thoughts of ending your life?",
     "Do you have a specific plan in mind for how you would do this?",
@@ -295,6 +320,7 @@ SUICIDE_QUESTIONS = [
     "Is there anyone — a family member, friend, or anyone — we can contact to be with you right now?"
 ]
 
+# OVERDOSE
 OVERDOSE_QUESTIONS = [
     "What substance or medication was taken, and approximately how much?",
     "How long ago was it taken?",
@@ -304,6 +330,7 @@ OVERDOSE_QUESTIONS = [
     "Is there a packet or bottle nearby that we can identify the substance from?"
 ]
 
+# DIARRHEA
 DIARRHEA_QUESTIONS = [
     "How long have you had the diarrhea?",
     "How many times have you had loose stools today?",
@@ -313,6 +340,7 @@ DIARRHEA_QUESTIONS = [
     "Have you recently travelled abroad or eaten anything that others also ate?"
 ]
 
+# COUGH
 COUGH_QUESTIONS = [
     "How long have you had this cough?",
     "Is it a dry cough or are you coughing up phlegm — and if so, what colour?",
@@ -321,6 +349,7 @@ COUGH_QUESTIONS = [
     "Do you have a history of asthma, COPD, or smoking?"
 ]
 
+# SORE THROAT
 SORE_THROAT_QUESTIONS = [
     "How long have you had the sore throat?",
     "Do you have difficulty swallowing or is your airway feeling blocked?",
@@ -329,6 +358,7 @@ SORE_THROAT_QUESTIONS = [
     "Have you been in contact with anyone with strep throat or similar illness?"
 ]
 
+# DYSURIA — branches to UTI vs STI based on answers
 DYSURIA_INITIAL = "Where exactly do you feel the burning or pain — inside when urinating, at the opening, or deeper in the pelvis or lower back?"
 DYSURIA_BRANCH_Q = "Do you also have increased frequency or urgency to urinate, or lower abdominal discomfort?"
 
@@ -348,6 +378,7 @@ DYSURIA_STI_QUESTIONS = [
     "Have you been tested for sexually transmitted infections before?"
 ]
 
+# GENITAL DISCHARGE (presenting complaint — leads into STI workup)
 GENITAL_DISCHARGE_QUESTIONS = [
     "How long have you noticed the discharge?",
     "Can you describe the discharge — colour, consistency, and any odour?",
@@ -357,6 +388,7 @@ GENITAL_DISCHARGE_QUESTIONS = [
     "When did you last have unprotected sexual contact?"
 ]
 
+# GENITAL SORE
 GENITAL_SORE_QUESTIONS = [
     "Can you describe the sore — is it painful, painless, a blister, or an ulcer?",
     "How long have you had it and has it changed in appearance?",
@@ -366,6 +398,7 @@ GENITAL_SORE_QUESTIONS = [
     "Have you ever been diagnosed with herpes, syphilis, or any STI before?"
 ]
 
+# DYSPAREUNIA
 DYSPAREUNIA_QUESTIONS = [
     "Is the pain during intercourse, after intercourse, or both?",
     "Where do you feel the pain — superficial at the entry, or deep inside?",
@@ -374,6 +407,7 @@ DYSPAREUNIA_QUESTIONS = [
     "Have you noticed any changes with your menstrual cycle if applicable?"
 ]
 
+# JOINT PAIN
 JOINT_PAIN_QUESTIONS = [
     "Which joints are affected — one joint or multiple?",
     "Is there any swelling, redness, or warmth around the affected joint?",
@@ -383,6 +417,7 @@ JOINT_PAIN_QUESTIONS = [
     "Do you have a history of gout, rheumatoid arthritis, or any joint condition?"
 ]
 
+# MIGRAINE
 MIGRAINE_QUESTIONS = [
     "How long have you had this migraine?",
     "Do you have any visual aura — flashing lights, zigzag lines, or blind spots — before it starts?",
@@ -392,6 +427,7 @@ MIGRAINE_QUESTIONS = [
     "Is this migraine typical for you, or does anything feel different this time?"
 ]
 
+# ABDOMINAL PAIN
 ABDOMINAL_PAIN_QUESTIONS = [
     "Where exactly in your abdomen is the pain — upper, lower, left, right, or all over?",
     "On a scale of 1 to 10, how severe is the pain?",
@@ -401,6 +437,7 @@ ABDOMINAL_PAIN_QUESTIONS = [
     "For those who menstruate — is there any chance this could be related to your cycle or pregnancy?"
 ]
 
+# VOMITING
 VOMITING_QUESTIONS = [
     "How many times have you vomited and over what period of time?",
     "Is there any blood in the vomit?",
@@ -409,6 +446,7 @@ VOMITING_QUESTIONS = [
     "Could this be related to something you ate, a medication, or alcohol?"
 ]
 
+# LOW BLOOD SUGAR
 LOW_BLOOD_SUGAR_QUESTIONS = [
     "What is your current blood glucose reading if you have a meter?",
     "Have you eaten or drunk anything sweet since the episode started?",
@@ -417,6 +455,9 @@ LOW_BLOOD_SUGAR_QUESTIONS = [
     "Are you alone or is there someone with you?"
 ]
 
+# ------------------------------
+# Map symptom to question list
+# ------------------------------
 QUESTION_MAP = {
     "headache_sah": HEADACHE_SAH_QUESTIONS,
     "headache_migraine": HEADACHE_MIGRAINE_QUESTIONS,
@@ -447,7 +488,7 @@ QUESTION_MAP = {
 }
 
 # ------------------------------
-# Red flag rules
+# Red flag rules per pathway
 # ------------------------------
 red_flag_rules = {
     "headache_sah": {
@@ -596,6 +637,7 @@ red_flag_rules = {
     }
 }
 
+# Non-emergency symptoms use low thresholds
 for sym in ["cough", "sore throat", "dysuria_uti", "dysuria_sti",
             "genital discharge", "genital sore", "dyspareunia",
             "joint pain", "migraine", "abdominal pain", "vomiting", "low blood sugar"]:
@@ -608,6 +650,9 @@ for sym in ["cough", "sore throat", "dysuria_uti", "dysuria_sti",
             ]
         }
 
+# ------------------------------
+# Red flag messages
+# ------------------------------
 red_flag_messages = {
     "headache_sah": "🚨 RED FLAG: Your symptoms may indicate a serious neurological emergency such as a subarachnoid haemorrhage or meningitis. Please call 999/112 or go to your nearest emergency department immediately.",
     "headache_migraine": "⚠️ ATTENTION: While this may be a migraine, some features warrant same-day medical review. Please contact your GP or urgent care today.",
@@ -633,216 +678,7 @@ completion_messages = {
 }
 
 # ------------------------------
-# Differential Diagnosis Engine
-# Max 3 differentials, ranked by likelihood based on answers
-# Each entry: (diagnosis, keywords_that_support_it, weight)
-# ------------------------------
-DIFFERENTIAL_CANDIDATES = {
-    "headache_sah": [
-        ("Subarachnoid Haemorrhage (SAH)", ["worst headache", "thunderclap", "sudden", "explosive", "10 out of 10"], 3),
-        ("Meningitis / Meningoencephalitis", ["neck stiffness", "fever", "photophobia", "confusion", "rash"], 3),
-        ("Hypertensive Emergency", ["severe headache", "history of hypertension", "high blood pressure"], 2),
-        ("Migraine", ["nausea", "light sensitivity", "previous headaches"], 1),
-        ("COVID-19", ["fever", "recent illness", "around someone unwell"], 1),
-    ],
-    "headache_migraine": [
-        ("Migraine with or without Aura", ["one side", "aura", "flashing lights", "nausea", "light sensitivity", "previous"], 3),
-        ("Tension-Type Headache", ["both sides", "stress", "no aura", "dull", "pressure"], 2),
-        ("COVID-19", ["fever", "recent illness", "around someone unwell", "loss of smell"], 2),
-        ("Cluster Headache", ["one eye", "tearing", "one sided", "severe"], 2),
-        ("Medication Overuse Headache", ["took medication", "regular painkillers"], 1),
-    ],
-    "chest pain_cardiac": [
-        ("Acute Myocardial Infarction (MI)", ["pressure", "radiating", "left arm", "jaw", "sweating", "history of heart"], 3),
-        ("Unstable Angina", ["exertion", "history of angina", "relieved by rest"], 2),
-        ("Pulmonary Embolism (PE)", ["sudden", "shortness of breath", "blood clot", "leg swelling"], 2),
-        ("COVID-19 Myocarditis", ["recent covid", "recent illness", "fever", "palpitations"], 1),
-        ("Aortic Dissection", ["tearing", "ripping", "radiating to back", "severe"], 1),
-    ],
-    "chest pain_non_cardiac": [
-        ("Musculoskeletal / Costochondritis", ["sharp", "worse on movement", "reproducible on pressing", "after injury"], 3),
-        ("Gastro-Oesophageal Reflux (GORD)", ["burning", "after eating", "acid", "heartburn"], 2),
-        ("COVID-19", ["cough", "fever", "recent illness", "breathless"], 2),
-        ("Pleuritis / Pleurisy", ["worse on breathing", "cough", "fever"], 2),
-        ("Pulmonary Embolism (PE)", ["blood clot", "leg swelling", "recent travel", "sudden"], 2),
-    ],
-    "shortness of breath": [
-        ("COVID-19", ["fever", "cough", "recent illness", "loss of smell", "fatigue"], 3),
-        ("Asthma Exacerbation", ["wheeze", "history of asthma", "trigger", "tightness"], 3),
-        ("Pulmonary Embolism (PE)", ["sudden", "blood clot", "leg swelling", "pleuritic pain"], 2),
-        ("Pneumonia", ["fever", "cough", "productive", "unwell"], 2),
-        ("Heart Failure", ["gradual", "history of heart", "leg swelling", "orthopnoea"], 1),
-    ],
-    "seizure": [
-        ("Epilepsy (Known or New Onset)", ["first seizure", "history of epilepsy", "tonic clonic"], 3),
-        ("Hypoglycaemia-Induced Seizure", ["diabetic", "low sugar", "missed meal", "insulin"], 2),
-        ("Meningitis / Encephalitis", ["fever", "neck stiffness", "headache", "confusion"], 2),
-        ("Alcohol Withdrawal Seizure", ["alcohol", "stopped drinking", "withdrawal"], 1),
-        ("Intracranial Mass", ["headache", "weakness", "vision changes", "gradual onset"], 1),
-    ],
-    "head injury": [
-        ("Concussion", ["brief loss of consciousness", "memory loss", "headache", "dizziness"], 3),
-        ("Extradural Haematoma", ["loss of consciousness", "lucid interval", "then deterioration"], 2),
-        ("Subdural Haematoma", ["blood thinners", "elderly", "warfarin", "gradual"], 2),
-        ("Skull Fracture", ["high impact", "clear fluid from ears or nose", "bruising"], 1),
-        ("Cerebral Contusion", ["severe impact", "prolonged unconsciousness", "focal deficit"], 1),
-    ],
-    "trauma": [
-        ("Fracture", ["deformity", "severe pain", "unable to move", "swelling"], 3),
-        ("Internal Haemorrhage", ["abdominal trauma", "pale", "collapse", "hypotension"], 2),
-        ("Spinal Cord Injury", ["neck pain", "back pain", "numbness", "weakness in legs"], 2),
-        ("Pneumothorax", ["chest trauma", "shortness of breath", "chest pain"], 1),
-        ("Soft Tissue Injury", ["bruising", "swelling", "able to move", "mild pain"], 1),
-    ],
-    "blackout_hypogly": [
-        ("Hypoglycaemia", ["diabetic", "insulin", "low reading", "shaking", "sweating"], 3),
-        ("Insulin Overdose", ["took insulin", "too much insulin", "missed meal"], 2),
-        ("Adrenal Insufficiency", ["fatigue", "weight loss", "no history of diabetes"], 1),
-    ],
-    "blackout_cardiac": [
-        ("Vasovagal Syncope", ["trigger", "standing", "pain", "heat", "warning", "brief"], 3),
-        ("Cardiac Arrhythmia", ["palpitations before", "heart condition", "no warning", "irregular"], 2),
-        ("Orthostatic Hypotension", ["standing up", "dehydration", "medication", "elderly"], 2),
-        ("Epileptic Seizure", ["jerking", "tongue biting", "prolonged", "post-ictal confusion"], 1),
-        ("Pulmonary Embolism", ["chest pain", "shortness of breath", "leg swelling"], 1),
-    ],
-    "rectal bleed": [
-        ("Haemorrhoids", ["bright red", "after straining", "small amount", "no pain"], 3),
-        ("Colorectal Cancer", ["change in bowel habit", "weight loss", "dark blood", "night sweats"], 2),
-        ("Inflammatory Bowel Disease", ["mucus", "cramping", "history of IBD", "young patient"], 2),
-        ("Upper GI Bleed", ["black tarry stool", "malaena", "vomiting blood", "dark blood"], 2),
-        ("Anal Fissure", ["bright red", "painful", "constipation", "tearing sensation"], 1),
-    ],
-    "suicidal thoughts": [
-        ("Major Depressive Disorder", ["low mood", "hopeless", "no energy", "not eating"], 3),
-        ("Bipolar Disorder", ["mood swings", "periods of high energy", "depression"], 2),
-        ("PTSD", ["trauma", "flashbacks", "nightmares", "anxiety"], 2),
-        ("Borderline Personality Disorder", ["impulsive", "unstable relationships", "self harm"], 1),
-        ("Acute Situational Crisis", ["recent loss", "bereavement", "job loss", "relationship"], 1),
-    ],
-    "overdose": [
-        ("Paracetamol Overdose", ["paracetamol", "panadol", "acetaminophen", "tablets"], 3),
-        ("Opioid Overdose", ["heroin", "morphine", "codeine", "oxycodone", "slow breathing", "pinpoint pupils"], 3),
-        ("Benzodiazepine Overdose", ["diazepam", "valium", "xanax", "drowsy", "slurred"], 2),
-        ("Alcohol Poisoning", ["alcohol", "drunk", "vodka", "wine", "spirits"], 2),
-        ("Tricyclic Antidepressant Overdose", ["amitriptyline", "antidepressant", "irregular heart"], 1),
-    ],
-    "diarrhea": [
-        ("Viral Gastroenteritis", ["sudden onset", "vomiting", "no travel", "others affected", "norovirus"], 3),
-        ("COVID-19", ["fever", "cough", "recent illness", "loss of smell", "contact"], 2),
-        ("Bacterial Gastroenteritis", ["travel", "food poisoning", "blood in stool", "high fever"], 2),
-        ("C. difficile", ["recent antibiotics", "hospital admission", "watery", "offensive smell"], 2),
-        ("Inflammatory Bowel Disease", ["blood and mucus", "cramping", "young", "recurrent"], 1),
-    ],
-    "cough": [
-        ("COVID-19", ["dry cough", "fever", "loss of smell", "fatigue", "recent contact"], 3),
-        ("Upper Respiratory Tract Infection", ["runny nose", "sore throat", "mild fever", "short duration"], 3),
-        ("Asthma", ["wheeze", "history of asthma", "worse at night", "triggers"], 2),
-        ("Pneumonia", ["productive cough", "fever", "shortness of breath", "unwell"], 2),
-        ("Lung Cancer", ["smoker", "haemoptysis", "weight loss", "chronic cough", "elderly"], 1),
-    ],
-    "sore throat": [
-        ("Viral Pharyngitis", ["mild", "runny nose", "cough", "no exudate", "short duration"], 3),
-        ("COVID-19", ["fever", "loss of smell", "fatigue", "contact", "recent"], 3),
-        ("Streptococcal Pharyngitis", ["white exudate", "high fever", "swollen glands", "no cough"], 2),
-        ("Infectious Mononucleosis", ["young", "fatigue", "splenomegaly", "generalised lymphadenopathy"], 2),
-        ("Peritonsillar Abscess", ["asymmetric swelling", "hot potato voice", "trismus", "drooling"], 1),
-    ],
-    "dysuria_uti": [
-        ("Urinary Tract Infection / Cystitis", ["frequency", "urgency", "cloudy urine", "suprapubic pain"], 3),
-        ("Pyelonephritis", ["flank pain", "fever", "rigors", "back pain", "unwell"], 2),
-        ("STI / Urethritis", ["discharge", "sexual contact", "sores", "no frequency"], 2),
-    ],
-    "dysuria_sti": [
-        ("Chlamydia", ["discharge", "unprotected sex", "painless", "young"], 3),
-        ("Gonorrhoea", ["purulent discharge", "unprotected sex", "dysuria", "yellow green"], 2),
-        ("Herpes Simplex (HSV)", ["blisters", "painful sores", "ulcers", "burning"], 2),
-    ],
-    "genital discharge": [
-        ("Chlamydia", ["unprotected sex", "painless", "clear discharge", "young"], 3),
-        ("Bacterial Vaginosis", ["fishy odour", "grey white discharge", "not painful"], 2),
-        ("Gonorrhoea", ["yellow green", "purulent", "dysuria", "unprotected sex"], 2),
-        ("Candidiasis", ["thick white", "itching", "no odour", "curdy"], 1),
-        ("Trichomonas", ["frothy", "yellow green", "offensive smell", "itching"], 1),
-    ],
-    "genital sore": [
-        ("Herpes Simplex (HSV)", ["painful blisters", "ulcers", "recurrent", "burning"], 3),
-        ("Syphilis (Primary)", ["painless ulcer", "hard", "single sore", "groin lymph nodes"], 2),
-        ("Chancroid", ["painful ulcer", "soft", "irregular edges", "tropical"], 1),
-    ],
-    "dyspareunia": [
-        ("Vaginismus / Pelvic Floor Dysfunction", ["superficial", "entry pain", "tightness", "anxiety"], 3),
-        ("Endometriosis", ["deep pain", "cyclical", "period pain", "deep dyspareunia"], 2),
-        ("Pelvic Inflammatory Disease (PID)", ["discharge", "fever", "bilateral pelvic pain", "unprotected sex"], 2),
-        ("Atrophic Vaginitis", ["menopause", "dryness", "post-menopausal", "burning"], 1),
-        ("STI", ["discharge", "sores", "unprotected sex"], 1),
-    ],
-    "joint pain": [
-        ("Osteoarthritis", ["older age", "worse with activity", "no fever", "large joints"], 3),
-        ("Rheumatoid Arthritis", ["morning stiffness", "multiple joints", "symmetrical", "improves with movement"], 2),
-        ("Gout", ["sudden onset", "big toe", "red", "hot", "swollen", "alcohol", "meat"], 2),
-        ("Reactive Arthritis / COVID-19 Arthralgia", ["recent infection", "recent covid", "fever", "multiple joints"], 2),
-        ("Septic Arthritis", ["fever", "single hot swollen joint", "unwell", "elevated temperature"], 1),
-    ],
-    "migraine": [
-        ("Migraine with Aura", ["aura", "flashing lights", "visual", "one sided", "nausea"], 3),
-        ("Migraine without Aura", ["one sided", "throbbing", "nausea", "light sensitivity", "no aura"], 3),
-        ("COVID-19", ["fever", "fatigue", "loss of smell", "recent contact"], 1),
-    ],
-    "abdominal pain": [
-        ("Appendicitis", ["right lower quadrant", "fever", "nausea", "worse on movement", "rebound"], 3),
-        ("Gastroenteritis", ["diarrhea", "vomiting", "fever", "crampy", "others affected"], 2),
-        ("Ectopic Pregnancy", ["lower abdominal", "missed period", "shoulder tip pain", "collapse"], 2),
-        ("Peptic Ulcer / Gastritis", ["upper abdominal", "burning", "after eating", "history of ulcer"], 2),
-        ("Bowel Obstruction", ["distension", "vomiting", "constipation", "colicky"], 1),
-    ],
-    "vomiting": [
-        ("Gastroenteritis", ["diarrhea", "fever", "cramping", "others affected", "food"], 3),
-        ("COVID-19", ["fever", "cough", "loss of smell", "recent contact"], 2),
-        ("Gastroparesis / Food Poisoning", ["after eating", "specific food", "nausea first"], 2),
-        ("Raised Intracranial Pressure", ["headache", "projectile", "no nausea before", "drowsy"], 1),
-        ("Medication Side Effect", ["new medication", "started recently", "no other symptoms"], 1),
-    ],
-    "low blood sugar": [
-        ("Hypoglycaemia", ["diabetic", "insulin", "missed meal", "low reading", "shaking"], 3),
-        ("Insulinoma", ["recurrent", "non-diabetic", "fasting hypoglycaemia"], 1),
-        ("Adrenal Insufficiency", ["fatigue", "weight loss", "dizziness", "non-diabetic"], 1),
-    ],
-}
-
-def generate_differentials(pathway: str, all_answers: List[AnswerEntry]) -> List[str]:
-    """
-    Score each candidate differential based on keywords found in all answers.
-    Return top 3 ranked by score, minimum score of 1 to be included.
-    """
-    candidates = DIFFERENTIAL_CANDIDATES.get(pathway, [])
-    if not candidates:
-        return []
-
-    combined_text = " ".join(entry.answer.lower() for entry in all_answers)
-    scored = []
-
-    for diagnosis, keywords, base_weight in candidates:
-        score = 0
-        for kw in keywords:
-            if kw in combined_text:
-                score += base_weight
-        scored.append((diagnosis, score))
-
-    # Sort by score descending
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    # Return top 3 with score > 0, otherwise return top 3 by base order
-    top = [d for d, s in scored if s > 0][:3]
-    if not top:
-        top = [candidates[0][0], candidates[1][0] if len(candidates) > 1 else None,
-               candidates[2][0] if len(candidates) > 2 else None]
-        top = [t for t in top if t][:3]
-
-    return top
-
-# ------------------------------
-# Priority order
+# Priority order — emergencies first
 # ------------------------------
 SYMPTOM_PRIORITY = [
     "suicidal thoughts", "overdose", "chest pain", "shortness of breath",
@@ -853,6 +689,9 @@ SYMPTOM_PRIORITY = [
     "cough", "sore throat", "joint pain", "other"
 ]
 
+# ------------------------------
+# Symptom detection
+# ------------------------------
 def detect_all_symptoms(text: str) -> List[str]:
     text_lower = text.lower()
     found = []
@@ -876,8 +715,10 @@ def get_next_symptom_to_triage(detected: List[str], triaged: List[str]) -> Optio
     return None
 
 def resolve_pathway(symptom_key: str, current_pathway: Optional[str]) -> str:
+    """Return the active pathway key for question/rule lookup."""
     if current_pathway:
         return current_pathway
+    # Default pathway before branching
     defaults = {
         "headache": "headache_sah",
         "chest pain": "chest pain_cardiac",
@@ -887,7 +728,12 @@ def resolve_pathway(symptom_key: str, current_pathway: Optional[str]) -> str:
     return defaults.get(symptom_key, symptom_key)
 
 def determine_branch(symptom_key: str, answer: str, question: str) -> Optional[str]:
+    """
+    Given the branching question and the patient's answer,
+    return the appropriate pathway key.
+    """
     answer_lower = answer.lower()
+
     if symptom_key == "headache" and HEADACHE_BRANCH_Q in question:
         if is_affirmative(answer) or any(w in answer_lower for w in [
             "worst", "thunderclap", "sudden", "explosion", "never had", "10", "worst ever"
@@ -895,6 +741,7 @@ def determine_branch(symptom_key: str, answer: str, question: str) -> Optional[s
             return "headache_sah"
         else:
             return "headache_migraine"
+
     if symptom_key == "chest pain" and CHEST_BRANCH_Q in question:
         if is_affirmative(answer) or any(w in answer_lower for w in [
             "pressure", "tightness", "squeezing", "heavy", "crushing", "elephant"
@@ -902,6 +749,7 @@ def determine_branch(symptom_key: str, answer: str, question: str) -> Optional[s
             return "chest pain_cardiac"
         else:
             return "chest pain_non_cardiac"
+
     if symptom_key == "blackout" and BLACKOUT_BRANCH_Q in question:
         if is_affirmative(answer) or any(w in answer_lower for w in [
             "diabetic", "diabetes", "insulin", "low sugar", "hypoglycemia", "glucose"
@@ -909,6 +757,7 @@ def determine_branch(symptom_key: str, answer: str, question: str) -> Optional[s
             return "blackout_hypogly"
         else:
             return "blackout_cardiac"
+
     if symptom_key == "dysuria" and DYSURIA_BRANCH_Q in question:
         if is_affirmative(answer) or any(w in answer_lower for w in [
             "frequency", "urgency", "lower abdomen", "bladder", "keep going toilet"
@@ -916,9 +765,11 @@ def determine_branch(symptom_key: str, answer: str, question: str) -> Optional[s
             return "dysuria_uti"
         else:
             return "dysuria_sti"
+
     return None
 
 def get_branch_question(symptom_key: str) -> Optional[str]:
+    """Return the branching question for symptoms that require it."""
     branch_questions = {
         "headache": HEADACHE_BRANCH_Q,
         "chest pain": CHEST_BRANCH_Q,
@@ -928,6 +779,7 @@ def get_branch_question(symptom_key: str) -> Optional[str]:
     return branch_questions.get(symptom_key)
 
 def get_initial_question(symptom_key: str) -> Optional[str]:
+    """Return a warm opening question before branching."""
     initials = {
         "headache": HEADACHE_INITIAL,
         "chest pain": CHEST_PAIN_INITIAL,
@@ -962,6 +814,9 @@ def check_red_flags(all_answers: List[AnswerEntry], pathway: str) -> tuple:
     risk_level = determine_risk_level(score, pathway)
     return red_flag, risk_level
 
+# ------------------------------
+# Endpoints
+# ------------------------------
 @app.get("/")
 def root():
     return {"message": "Triage AI Backend Running"}
@@ -972,11 +827,13 @@ def triage(symptom: SymptomInput):
     triaged_symptoms = list(symptom.triaged_symptoms or [])
     current_pathway = symptom.current_pathway
 
+    # --- Step 1: Detect symptoms from initial message ---
     if not detected_symptoms:
         detected_symptoms = detect_all_symptoms(symptom.message)
         if not detected_symptoms:
             detected_symptoms = ["other"]
 
+    # --- Step 2: Determine which symptom we are working on ---
     if symptom.symptom_type and symptom.symptom_type in detected_symptoms:
         symptom_key = symptom.symptom_type
     else:
@@ -984,16 +841,20 @@ def triage(symptom: SymptomInput):
         if not symptom_key:
             symptom_key = "other"
 
+    # --- Step 3: Build answer history ---
     idx = symptom.question_index
     all_answers = list(symptom.all_answers or [])
 
+    # Determine what question was just answered
     current_question = ""
     if idx == 1:
+        # They just answered the initial question (or branch question if no initial)
         initial_q = get_initial_question(symptom_key)
         current_question = initial_q if initial_q else (get_branch_question(symptom_key) or "")
     elif idx == 2 and get_initial_question(symptom_key):
         current_question = get_branch_question(symptom_key) or ""
     else:
+        # Already in a pathway — figure out which question they answered
         pathway = resolve_pathway(symptom_key, current_pathway)
         questions = QUESTION_MAP.get(pathway, QUESTION_MAP.get(symptom_key, []))
         offset = 2 if get_initial_question(symptom_key) else 1
@@ -1005,6 +866,8 @@ def triage(symptom: SymptomInput):
 
     all_answers.append(AnswerEntry(question=current_question, answer=symptom.message))
 
+    # --- Step 4: Handle branching ---
+    # Phase A: Initial open question (idx == 0 → asking initial, response at idx == 1)
     if idx == 0:
         initial_q = get_initial_question(symptom_key)
         if initial_q:
@@ -1019,8 +882,7 @@ def triage(symptom: SymptomInput):
                 "detected_symptoms": detected_symptoms,
                 "triaged_symptoms": triaged_symptoms,
                 "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": []
+                "transition_message": None
             }
         else:
             branch_q = get_branch_question(symptom_key)
@@ -1036,19 +898,21 @@ def triage(symptom: SymptomInput):
                     "detected_symptoms": detected_symptoms,
                     "triaged_symptoms": triaged_symptoms,
                     "current_pathway": current_pathway,
-                    "transition_message": None,
-                    "differential_diagnoses": []
+                    "transition_message": None
                 }
 
+    # Phase B: Branch question response — determine pathway
     if not current_pathway:
         branch_q = get_branch_question(symptom_key)
         if branch_q:
+            # Find the answer to the branch question
             branch_answer = None
             for entry in all_answers:
                 if branch_q in entry.question or entry.question in branch_q:
                     branch_answer = entry.answer
                     break
             if branch_answer is None:
+                # We just answered the initial question, now ask the branch question
                 return {
                     "symptom_type": symptom_key,
                     "question_index": idx + 1,
@@ -1060,33 +924,34 @@ def triage(symptom: SymptomInput):
                     "detected_symptoms": detected_symptoms,
                     "triaged_symptoms": triaged_symptoms,
                     "current_pathway": None,
-                    "transition_message": None,
-                    "differential_diagnoses": []
+                    "transition_message": None
                 }
+            # Determine branch from answer
             new_pathway = determine_branch(symptom_key, branch_answer, branch_q)
             if new_pathway:
                 current_pathway = new_pathway
 
+    # --- Step 5: Resolve active pathway and questions ---
     pathway = resolve_pathway(symptom_key, current_pathway)
     questions = QUESTION_MAP.get(pathway, [])
     if not questions:
         questions = QUESTION_MAP.get(symptom_key, [])
         pathway = symptom_key
 
+    # Calculate offset: how many intro/branch questions came before the pathway questions
     offset = 0
     if get_initial_question(symptom_key):
         offset += 1
     if get_branch_question(symptom_key):
         offset += 1
 
-    pathway_q_idx = idx - offset
+    pathway_q_idx = idx - offset  # which pathway question we're on (0-based)
 
+    # --- Step 6: Red flag check ---
     red_flag, risk_level = check_red_flags(all_answers, pathway)
     red_flag_message = red_flag_messages.get(pathway) if red_flag else None
 
-    # Generate differentials based on answers so far
-    differentials = generate_differentials(pathway, all_answers)
-
+    # Immediate red flag on suicidal/overdose — return emergency response immediately
     if red_flag and pathway in ("suicidal thoughts", "overdose") and idx <= 2:
         return {
             "symptom_type": symptom_key,
@@ -1099,10 +964,10 @@ def triage(symptom: SymptomInput):
             "detected_symptoms": detected_symptoms,
             "triaged_symptoms": triaged_symptoms,
             "current_pathway": current_pathway,
-            "transition_message": None,
-            "differential_diagnoses": differentials
+            "transition_message": None
         }
 
+    # --- Step 7: Additional info phase ---
     if symptom.phase == "additional":
         message_lower = symptom.message.lower().strip()
         no_indicators = [
@@ -1110,6 +975,7 @@ def triage(symptom: SymptomInput):
             "no thanks", "done", "nothing else", "no more", "all good", "that is all"
         ]
         if any(message_lower == ind or message_lower.startswith(ind) for ind in no_indicators):
+            remaining = [s for s in detected_symptoms if s not in triaged_symptoms]
             triaged_symptoms_updated = triaged_symptoms + [symptom_key]
             remaining = [s for s in detected_symptoms if s not in triaged_symptoms_updated]
             if remaining:
@@ -1129,8 +995,7 @@ def triage(symptom: SymptomInput):
                         "detected_symptoms": detected_symptoms,
                         "triaged_symptoms": triaged_symptoms_updated,
                         "current_pathway": None,
-                        "transition_message": f"Thank you. Now let me ask you about your {next_sym}.",
-                        "differential_diagnoses": differentials
+                        "transition_message": f"Thank you. Now let me ask you about your {next_sym}."
                     }
             return {
                 "symptom_type": symptom_key,
@@ -1143,8 +1008,7 @@ def triage(symptom: SymptomInput):
                 "detected_symptoms": detected_symptoms,
                 "triaged_symptoms": triaged_symptoms,
                 "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": differentials
+                "transition_message": None
             }
         else:
             return {
@@ -1158,13 +1022,15 @@ def triage(symptom: SymptomInput):
                 "detected_symptoms": detected_symptoms,
                 "triaged_symptoms": triaged_symptoms,
                 "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": differentials
+                "transition_message": None
             }
 
+    # --- Step 8: Ask next pathway question or move on ---
     if pathway_q_idx >= len(questions):
+        # Done with this symptom
         triaged_symptoms_updated = triaged_symptoms + [symptom_key]
         remaining = [s for s in detected_symptoms if s not in triaged_symptoms_updated]
+
         if remaining:
             next_sym = get_next_symptom_to_triage(detected_symptoms, triaged_symptoms_updated)
             next_initial = get_initial_question(next_sym)
@@ -1181,8 +1047,7 @@ def triage(symptom: SymptomInput):
                 "detected_symptoms": detected_symptoms,
                 "triaged_symptoms": triaged_symptoms_updated,
                 "current_pathway": None,
-                "transition_message": f"Thank you. Now let me ask you about your {next_sym}.",
-                "differential_diagnoses": differentials
+                "transition_message": f"Thank you. Now let me ask you about your {next_sym}."
             }
         else:
             return {
@@ -1196,8 +1061,7 @@ def triage(symptom: SymptomInput):
                 "detected_symptoms": detected_symptoms,
                 "triaged_symptoms": triaged_symptoms,
                 "current_pathway": current_pathway,
-                "transition_message": None,
-                "differential_diagnoses": differentials
+                "transition_message": None
             }
 
     next_question = questions[pathway_q_idx]
@@ -1212,6 +1076,5 @@ def triage(symptom: SymptomInput):
         "detected_symptoms": detected_symptoms,
         "triaged_symptoms": triaged_symptoms,
         "current_pathway": current_pathway,
-        "transition_message": None,
-        "differential_diagnoses": differentials
+        "transition_message": None
     }
