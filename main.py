@@ -200,7 +200,7 @@ red_flag_messages = {
     "blackout_hypogly": "🚨 RED FLAG: A hypoglycaemic episode requires immediate treatment. If you cannot take glucose by mouth, call 911 now.",
     "blackout_cardiac": "🚨 RED FLAG: Loss of consciousness may indicate a serious cardiac or neurological cause. Please go to your nearest emergency department immediately.",
     "rectal bleed": "🚨 RED FLAG: Significant rectal bleeding requires urgent assessment. Please go to your nearest emergency department immediately.",
-    "suicidal thoughts": "🚨 URGENT: You are not alone and help is here. Please call 911 now, or contact the Samaritans on 116 123 (free, 24/7). A clinician wants to support you through this.",
+    "suicidal thoughts": "🚨 URGENT: You are not alone and help is here. Please call 911 now, or contact the Saskatchewan Mobile Crisis line on 306-933-6200, or the Canada Suicide Prevention Service on 1-833-456-4566 (free, 24/7). A clinician wants to support you through this.",
     "overdose": "🚨 RED FLAG: This is a medical emergency. Please call 911 immediately. Do not wait for symptoms to worsen.",
     "diarrhea": "⚠️ ATTENTION: Your symptoms suggest possible serious infection or dehydration. Please seek medical attention today.",
     "other": "🚨 RED FLAG: Based on your symptoms, please seek emergency care immediately or call 911."
@@ -394,12 +394,16 @@ def triage(symptom: SymptomInput):
 
     # --- Phase A: idx == 0 — just gave complaint ---
     if idx == 0:
+        # Check red flags even at idx==0 — patient may have said "worst headache of my life"
+        early_pathway = resolve_pathway(symptom_key, current_pathway)
+        early_rf, early_rl = check_red_flags(all_answers, early_pathway)
+        early_rfm = red_flag_messages.get(early_pathway) if early_rf else None
         if has_initial:
-            return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": get_initial_question(symptom_key), "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+            return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": get_initial_question(symptom_key), "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
         elif has_branch:
-            return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": get_branch_question(symptom_key), "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+            return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": get_branch_question(symptom_key), "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
         else:
-            return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+            return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
 
     # --- Phase B: after initial, ask branch question if not yet asked ---
     if has_initial and has_branch and idx == 1:
