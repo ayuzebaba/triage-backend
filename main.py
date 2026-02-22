@@ -412,15 +412,18 @@ def triage(symptom: SymptomInput):
             current_pathway = new_pathway
 
     # --- Phase D: universal intake questions ---
-    # Fire after initial+branch questions are done, before pathway questions
-    if idx <= offset:
-        # Just finished initial/branch — ask first universal question
-        return {"symptom_type": symptom_key, "question_index": offset + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+    # Red flags checked here so alerts fire immediately even during universal intake
+    if idx <= offset or (offset < idx <= offset + NUM_UNIVERSAL):
+        early_pathway = resolve_pathway(symptom_key, current_pathway)
+        early_rf, early_rl = check_red_flags(all_answers, early_pathway)
+        early_rfm = red_flag_messages.get(early_pathway) if early_rf else None
 
-    if offset < idx <= offset + NUM_UNIVERSAL:
-        u_idx = idx - offset   # 1-based: 1 means we just answered universal[0]
+        if idx <= offset:
+            return {"symptom_type": symptom_key, "question_index": offset + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+
+        u_idx = idx - offset
         if u_idx < NUM_UNIVERSAL:
-            return {"symptom_type": symptom_key, "question_index": idx + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[u_idx], "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+            return {"symptom_type": symptom_key, "question_index": idx + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[u_idx], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
         # else: all universal questions answered — fall through to pathway questions
 
     # --- Step 5 onwards: pathway questions (same as original) ---
