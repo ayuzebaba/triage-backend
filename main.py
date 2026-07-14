@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import os
-from emergency_call import trigger_emergency_call
+from emergency_call import trigger_emergency_call, build_emergency_twiml
 
 app = FastAPI()
 
@@ -514,3 +515,23 @@ def trigger_emergency_call_endpoint(payload: EmergencyCallRequest):
         location="location unavailable (GPS detection not yet built)",
     )
     return call_result
+
+
+@app.api_route("/emergency-call-twiml", methods=["GET", "POST"])
+def emergency_call_twiml(
+    severity: str = Query(...),
+    symptom: str = Query(...),
+    location: str = Query(...),
+):
+    """
+    Twilio fetches this URL the moment the clinical contact answers the
+    emergency call, to find out what to say. Twilio calls webhook URLs with
+    POST by default, but GET is also accepted here in case that's ever
+    configured differently.
+
+    This endpoint was missing previously — its absence caused Twilio's
+    generic "An application error has occurred. Goodbye." message, since the
+    call connected but the instructions for what to say could not be found.
+    """
+    twiml = build_emergency_twiml(severity, symptom, location)
+    return Response(content=twiml, media_type="application/xml")
