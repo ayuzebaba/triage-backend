@@ -14,6 +14,7 @@ Requires these environment variables to be set (e.g. in Railway):
 """
 
 import os
+from urllib.parse import quote
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 
@@ -56,9 +57,14 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
 
     # Build the TwiML callback URL with the details as query params.
     # Twilio will fetch this URL when the call connects, to know what to say.
+    # IMPORTANT: symptom/location often contain spaces, parentheses, etc.
+    # Twilio rejects the whole request with "Url is not a valid URL" if these
+    # aren't percent-encoded first.
+    safe_symptom = quote(str(symptom))
+    safe_location = quote(str(location))
     twiml_url = (
         f"{PUBLIC_BASE_URL}/emergency-call-twiml"
-        f"?severity={severity}&symptom={symptom}&location={location}"
+        f"?severity={severity}&symptom={safe_symptom}&location={safe_location}"
     )
 
     call = client.calls.create(
