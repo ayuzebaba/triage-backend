@@ -85,7 +85,7 @@ def build_emergency_twiml(severity: str, symptom: str, location: str) -> str:
     """
     response = VoiceResponse()
     response.say(
-        f"This is an automated alert from the BRISK Triage System. "
+        f"This is a BRISK Triage System ALERT from Ayodele in Saskatoon to Dr Obayan in Nipawin. "
         f"A patient has reported an emergency severity of {severity} out of 10, "
         f"with the symptom: {symptom}. "
         f"Patient location: {location}. "
