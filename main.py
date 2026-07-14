@@ -476,11 +476,16 @@ def triage(symptom: SymptomInput):
 
     if result.get("red_flag") and result.get("risk_level") == "high":
         session_id = symptom.session_id or "anonymous-session"
+        # NOTE: unlike /trigger-emergency-call (used by SystemSelector.js),
+        # this /triage endpoint (used by TriageChat.js) has no location
+        # detection wired in yet — TriageChat.js doesn't run the GPS/IP
+        # detection logic that SystemSelector.js now has. Known gap, not
+        # forgotten — TriageChat.js isn't currently in the live patient flow.
         call_result = trigger_emergency_call(
             session_id=session_id,
             severity=10,
             symptom=result.get("symptom_type", "unspecified"),
-            location="location unavailable (GPS detection not yet built)",
+            location="location unavailable — TriageChat.js has no location detection built yet",
         )
         result["emergency_call"] = call_result
 
@@ -492,6 +497,7 @@ class EmergencyCallRequest(BaseModel):
     symptom: str
     severity: int
     system_id: Optional[str] = None
+    location: Optional[str] = None
 
 
 @app.post("/trigger-emergency-call")
@@ -504,6 +510,11 @@ def trigger_emergency_call_endpoint(payload: EmergencyCallRequest):
 
     Called the instant a patient rates a symptom 10/10 on an emergency-tagged
     card (see INSTANT_911_SYMPTOMS in SystemSelector.js).
+
+    location now comes from SystemSelector.js's real GPS/IP detection
+    (added after this endpoint was first built, when location detection
+    didn't exist yet) — falls back to a clear placeholder only if the
+    frontend genuinely couldn't determine anything.
     """
     if payload.severity < 9:
         return {"status": "skipped", "reason": "severity below threshold"}
@@ -512,7 +523,7 @@ def trigger_emergency_call_endpoint(payload: EmergencyCallRequest):
         session_id=payload.session_id,
         severity=payload.severity,
         symptom=payload.symptom,
-        location="location unavailable (GPS detection not yet built)",
+        location=payload.location or "location unavailable — patient's browser could not determine it",
     )
     return call_result
 
