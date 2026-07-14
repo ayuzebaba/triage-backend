@@ -2,8 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
-import os
-from emergency_call import trigger_emergency_call
 
 app = FastAPI()
 
@@ -36,7 +34,6 @@ class SymptomInput(BaseModel):
     triaged_symptoms: Optional[List[str]] = []
     risk_score: Optional[int] = 0
     current_pathway: Optional[str] = None
-    session_id: Optional[str] = None
 
 SYMPTOM_KEYWORDS = {
     "headache": ["headache", "head pain", "head hurts", "head ache", "pain in my head", "head is pounding", "head is killing me", "worst headache"],
@@ -81,6 +78,10 @@ def is_negative(answer: str) -> bool:
     a = answer.lower().strip()
     return any(a.startswith(w) or a == w for w in negative_answers)
 
+# ------------------------------
+# Universal intake questions
+# 3 questions asked for EVERY symptom, after initial/branch, before pathway questions
+# ------------------------------
 UNIVERSAL_INTAKE = [
     "When did this start — today, a few days ago, or longer?",
     "Is it getting better, getting worse, or staying the same?",
@@ -88,10 +89,12 @@ UNIVERSAL_INTAKE = [
 ]
 NUM_UNIVERSAL = len(UNIVERSAL_INTAKE)
 
+# Pathways that trigger a red flag the moment they are confirmed by branching
+# regardless of keyword scores — the branch answer itself implies danger
 INSTANT_RED_FLAG_PATHWAYS = {
-    "headache_sah",
-    "chest pain_cardiac",
-    "blackout_cardiac",
+    "headache_sah",          # confirmed thunderclap/worst ever headache
+    "chest pain_cardiac",    # confirmed cardiac-type chest pain
+    "blackout_cardiac",      # confirmed cardiac syncope
 }
 
 HEADACHE_INITIAL = "On a scale of 1 to 10, how severe is this headache?"
@@ -165,7 +168,7 @@ QUESTION_MAP = {
 
 red_flag_rules = {
     "headache_sah": {"threshold": 2, "triggers": [(3, ["worst headache", "thunderclap", "sudden severe", "explosive"]), (2, ["neck stiffness", "stiff neck", "cannot bend neck"]), (2, ["sensitivity to light", "photophobia", "light hurts"]), (2, ["confusion", "confused", "drowsy", "altered"]), (2, ["fever", "high temperature"]), (1, ["vomiting", "nausea"])]},
-    "headache_migraine": {"threshold": 2, "triggers": [(3, ["neck stiffness", "stiff neck", "fever"]), (2, ["first time", "never had before", "never had this before", "no i have not", "no never", "first ever"]), (2, ["getting worse", "worse", "worsening"]), (1, ["vomiting", "nausea", "confusion"])]},
+    "headache_migraine": {"threshold": 3, "triggers": [(2, ["neck stiffness", "stiff neck", "fever"]), (1, ["first time", "never had this before", "unusual for me"])]},
     "chest pain_cardiac": {"threshold": 2, "triggers": [(3, ["heart attack", "cardiac arrest"]), (2, ["radiating to arm", "left arm", "jaw pain", "radiating to jaw"]), (2, ["shortness of breath", "can't breathe", "difficulty breathing"]), (2, ["sweating", "cold sweat", "clammy"]), (2, ["fainted", "syncope", "passed out"]), (1, ["crushing", "pressure", "squeezing", "heavy"]), (1, ["palpitations", "heart racing", "irregular"])]},
     "chest pain_non_cardiac": {"threshold": 3, "triggers": [(2, ["blood clot", "dvt", "pe", "pulmonary embolism"]), (2, ["cannot breathe", "severe shortness of breath"]), (1, ["fever", "cough", "pleuritic"])]},
     "shortness of breath": {"threshold": 2, "triggers": [(3, ["cannot breathe at all", "turning blue", "lips blue", "cyanosis"]), (2, ["chest pain", "chest tightness"]), (2, ["sudden onset", "came on suddenly"]), (2, ["blood clot", "pe", "pulmonary embolism"]), (1, ["worsening", "getting worse", "severe"])]},
@@ -209,6 +212,9 @@ completion_messages = {
     "low": "✅ Thank you for the information. Your responses have been recorded. Please contact your GP or a healthcare professional for further assessment."
 }
 
+# ------------------------------
+# Differential Diagnosis Engine
+# ------------------------------
 DIFFERENTIAL_CANDIDATES = {
     "headache_sah": [("Subarachnoid Haemorrhage (SAH)", ["worst headache", "thunderclap", "sudden", "explosive", "10 out of 10"], 3), ("Meningitis / Meningoencephalitis", ["neck stiffness", "fever", "photophobia", "confusion", "rash"], 3), ("Hypertensive Emergency", ["severe headache", "history of hypertension", "high blood pressure"], 2), ("Migraine", ["nausea", "light sensitivity", "previous headaches"], 1), ("COVID-19", ["fever", "recent illness", "around someone unwell"], 1)],
     "headache_migraine": [("Migraine with or without Aura", ["one side", "aura", "flashing lights", "nausea", "light sensitivity", "previous"], 3), ("Tension-Type Headache", ["both sides", "stress", "no aura", "dull", "pressure"], 2), ("COVID-19", ["fever", "recent illness", "around someone unwell", "loss of smell"], 2), ("Cluster Headache", ["one eye", "tearing", "one sided", "severe"], 2), ("Medication Overuse Headache", ["took medication", "regular painkillers"], 1)],
@@ -320,7 +326,8 @@ def check_red_flags(all_answers: List[AnswerEntry], pathway: str) -> tuple:
 def root():
     return {"message": "Triage AI Backend Running"}
 
-def _triage_logic(symptom: SymptomInput) -> dict:
+@app.post("/triage")
+def triage(symptom: SymptomInput):
     detected_symptoms = list(symptom.detected_symptoms or [])
     triaged_symptoms = list(symptom.triaged_symptoms or [])
     current_pathway = symptom.current_pathway
@@ -343,18 +350,36 @@ def _triage_logic(symptom: SymptomInput) -> dict:
     has_initial = get_initial_question(symptom_key) is not None
     has_branch = get_branch_question(symptom_key) is not None
 
+    # --------------------------------------------------------------
+    # OFFSET LOGIC — same clean approach as the original code
+    # plus NUM_UNIVERSAL slots inserted between initial/branch and pathway questions
+    #
+    # idx 0 → patient gives complaint
+    # idx 1 → answer to initial clarifying q  (if has_initial)
+    # idx 1 or 2 → branch question            (if has_branch, after initial)
+    # THEN 3 universal intake questions
+    # THEN pathway-specific questions
+    #
+    # offset = (1 if has_initial else 0) + (1 if has_branch else 0) + NUM_UNIVERSAL
+    # --------------------------------------------------------------
     offset = 0
     if has_initial:
         offset += 1
     if has_branch:
         offset += 1
 
+    # Universal questions sit at idx positions: (offset+1) to (offset+NUM_UNIVERSAL)
+    # i.e. the first universal question is sent when idx == offset (after initial+branch answered)
+    # Pathway questions start at idx == offset + NUM_UNIVERSAL
+
+    # --- What question was just answered (for history recording) ---
     current_question = ""
     if has_initial and idx == 1:
         current_question = get_initial_question(symptom_key) or ""
     elif has_branch and idx == (2 if has_initial else 1):
         current_question = get_branch_question(symptom_key) or ""
     elif offset < idx <= offset + NUM_UNIVERSAL:
+        # Answering one of the universal questions
         u_idx = idx - offset - 1
         if 0 <= u_idx < NUM_UNIVERSAL:
             current_question = UNIVERSAL_INTAKE[u_idx]
@@ -367,7 +392,9 @@ def _triage_logic(symptom: SymptomInput) -> dict:
 
     all_answers.append(AnswerEntry(question=current_question, answer=symptom.message))
 
+    # --- Phase A: idx == 0 — just gave complaint ---
     if idx == 0:
+        # Check red flags even at idx==0 — patient may have said "worst headache of my life"
         early_pathway = resolve_pathway(symptom_key, current_pathway)
         early_rf, early_rl = check_red_flags(all_answers, early_pathway)
         early_rfm = red_flag_messages.get(early_pathway) if early_rf else None
@@ -378,12 +405,11 @@ def _triage_logic(symptom: SymptomInput) -> dict:
         else:
             return {"symptom_type": symptom_key, "question_index": 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[0], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
 
+    # --- Phase B: after initial, ask branch question if not yet asked ---
     if has_initial and has_branch and idx == 1:
-        b_pathway = resolve_pathway(symptom_key, current_pathway)
-        b_rf, b_rl = check_red_flags(all_answers, b_pathway)
-        b_rfm = red_flag_messages.get(b_pathway) if b_rf else None
-        return {"symptom_type": symptom_key, "question_index": 2, "phase": "triage", "next_question": get_branch_question(symptom_key), "red_flag": b_rf, "red_flag_message": b_rfm, "risk_level": b_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+        return {"symptom_type": symptom_key, "question_index": 2, "phase": "triage", "next_question": get_branch_question(symptom_key), "red_flag": False, "red_flag_message": None, "risk_level": "low", "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
 
+    # --- Phase C: resolve pathway from branch answer ---
     if not current_pathway and has_branch:
         branch_q = get_branch_question(symptom_key)
         branch_answer = None
@@ -397,11 +423,14 @@ def _triage_logic(symptom: SymptomInput) -> dict:
         if new_pathway:
             current_pathway = new_pathway
 
+    # --- Phase D: universal intake questions ---
+    # Red flags checked here so alerts fire immediately even during universal intake
     if idx <= offset or (offset < idx <= offset + NUM_UNIVERSAL):
         early_pathway = resolve_pathway(symptom_key, current_pathway)
         early_rf, early_rl = check_red_flags(all_answers, early_pathway)
         early_rfm = red_flag_messages.get(early_pathway) if early_rf else None
 
+        # Force red flag for pathways that are dangerous the moment they are confirmed
         if current_pathway in INSTANT_RED_FLAG_PATHWAYS and not early_rf:
             early_rf = True
             early_rl = "high"
@@ -413,7 +442,9 @@ def _triage_logic(symptom: SymptomInput) -> dict:
         u_idx = idx - offset
         if u_idx < NUM_UNIVERSAL:
             return {"symptom_type": symptom_key, "question_index": idx + 1, "phase": "triage", "next_question": UNIVERSAL_INTAKE[u_idx], "red_flag": early_rf, "red_flag_message": early_rfm, "risk_level": early_rl, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": []}
+        # else: all universal questions answered — fall through to pathway questions
 
+    # --- Step 5 onwards: pathway questions (same as original) ---
     pathway = resolve_pathway(symptom_key, current_pathway)
     questions = QUESTION_MAP.get(pathway, [])
     if not questions:
@@ -460,57 +491,3 @@ def _triage_logic(symptom: SymptomInput) -> dict:
 
     next_question = questions[pathway_q_idx]
     return {"symptom_type": symptom_key, "question_index": idx + 1, "phase": "triage", "next_question": next_question, "red_flag": red_flag, "red_flag_message": red_flag_message, "risk_level": risk_level, "detected_symptoms": detected_symptoms, "triaged_symptoms": triaged_symptoms, "current_pathway": current_pathway, "transition_message": None, "differential_diagnoses": differentials}
-
-
-@app.post("/triage")
-def triage(symptom: SymptomInput):
-    """
-    Public /triage endpoint. Delegates to _triage_logic() for all existing
-    triage behaviour (unchanged), then checks the result for a high-risk
-    red flag and — if found — automatically triggers a Twilio voice call
-    to the clinical contact number. This wrapper approach means none of
-    the original branching logic above had to be touched.
-    """
-    result = _triage_logic(symptom)
-
-    if result.get("red_flag") and result.get("risk_level") == "high":
-        session_id = symptom.session_id or "anonymous-session"
-        call_result = trigger_emergency_call(
-            session_id=session_id,
-            severity=10,
-            symptom=result.get("symptom_type", "unspecified"),
-            location="location unavailable (GPS detection not yet built)",
-        )
-        result["emergency_call"] = call_result
-
-    return result
-
-
-class EmergencyCallRequest(BaseModel):
-    session_id: str
-    symptom: str
-    severity: int
-    system_id: Optional[str] = None
-
-
-@app.post("/trigger-emergency-call")
-def trigger_emergency_call_endpoint(payload: EmergencyCallRequest):
-    """
-    Standalone emergency-call endpoint for SystemSelector.js (the card-based
-    symptom/severity picker). This page does NOT go through /triage or
-    _triage_logic() at all, so this endpoint exists independently — it just
-    takes a symptom + severity and fires the Twilio call directly.
-
-    Called the instant a patient rates a symptom 10/10 on an emergency-tagged
-    card (see INSTANT_911_SYMPTOMS in SystemSelector.js).
-    """
-    if payload.severity < 9:
-        return {"status": "skipped", "reason": "severity below threshold"}
-
-    call_result = trigger_emergency_call(
-        session_id=payload.session_id,
-        severity=payload.severity,
-        symptom=payload.symptom,
-        location="location unavailable (GPS detection not yet built)",
-    )
-    return call_result
