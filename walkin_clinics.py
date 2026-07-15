@@ -3,20 +3,44 @@ BRISK Walk-In Clinic Search Module
 -----------------------------------
 Searches OpenStreetMap's Overpass API for nearby walk-in clinics.
 
-This runs SERVER-SIDE (backend calling Overpass), not from the browser.
-The original implementation had the browser call Overpass directly, which
-failed in production: Overpass's public API does not reliably send CORS
-headers for arbitrary browser origins, so every request was blocked
-regardless of how correctly it was formatted. Server-to-server requests
-have no CORS restriction at all — only browser-to-server does — so moving
-this call here is the actual fix, not a smaller patch to the request format.
+This runs SERVER-SIDE (backend calling Overpass), not from the browser —
+the original browser-based version hit a CORS block that was never
+actually about request formatting; see below.
+
+TWO separate issues were found and fixed here, not one:
+1. CORS: Overpass's public API doesn't reliably send CORS headers for
+   arbitrary browser origins, so calling it directly from the browser was
+   blocked regardless of formatting. Moving the call server-side (here)
+   fixes this — server-to-server requests have no CORS restriction at all.
+2. 406 Not Acceptable: even server-side, overpass-api.de's PRIMARY server
+   started rejecting requests with generic/missing User-Agent headers
+   sometime around April 2026 (confirmed via multiple independent GitHub
+   issues on drolbr/Overpass-API and DinoTools/python-overpy, plus OSM
+   community forum threads reporting the identical 406 symptom). Python's
+   httpx sends a generic default User-Agent, which is exactly what's now
+   rejected. Fixed by (a) sending a proper descriptive User-Agent, and
+   (b) using overpass.kumi.systems — a mirror confirmed by multiple
+   sources to not enforce this restriction as aggressively as the primary.
 """
 
 import math
 from urllib.parse import urlencode
 import httpx
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Mirror chosen over the primary (overpass-api.de) specifically because
+# multiple 2026 reports confirm the primary now 406s generic User-Agents
+# far more aggressively than this mirror does.
+OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
+
+# Overpass's usage policy asks for a descriptive User-Agent identifying
+# the application — not just good practice, but now actively enforced by
+# the primary server (see module docstring). Sent regardless of which
+# server is used, since it's the correct way to call this API either way.
+REQUEST_HEADERS = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    "User-Agent": "BRISK-Triage-System/1.0 (Brisk Innovation; Saskatchewan patient triage app)",
+    "Accept": "application/json",
+}
 
 
 def _distance_km(lat1, lng1, lat2, lng2):
@@ -49,7 +73,7 @@ def _run_query(lat, lng, radius_meters):
     with httpx.Client(timeout=10.0) as client:
         res = client.post(
             OVERPASS_URL,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=REQUEST_HEADERS,
             content=urlencode({"data": query}),
         )
         res.raise_for_status()
