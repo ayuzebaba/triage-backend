@@ -70,7 +70,7 @@ def _build_query(lat, lng, radius_meters):
 
 def _run_query(lat, lng, radius_meters):
     query = _build_query(lat, lng, radius_meters)
-    with httpx.Client(timeout=10.0) as client:
+    with httpx.Client(timeout=20.0) as client:
         res = client.post(
             OVERPASS_URL,
             headers=REQUEST_HEADERS,
@@ -88,11 +88,15 @@ def find_nearby_walkin_clinics(lat: float, lng: float) -> dict:
     a usable dict back, so a slow/unreachable Overpass server can't crash
     or hang the request; it just returns an error status the frontend
     already knows how to display gracefully.
+
+    Uses a SINGLE query at a wider radius (25km) rather than two sequential
+    calls (15km, then 40km if too few results) — the original two-call
+    approach could add up to 40 seconds worst-case against a slower mirror,
+    which is exactly what caused the timeout seen in testing. One call at
+    a slightly wider radius is both simpler and faster in the common case.
     """
     try:
-        elements = _run_query(lat, lng, 15000)  # 15km first
-        if len(elements) < 3:
-            elements = _run_query(lat, lng, 40000)  # widen to 40km
+        elements = _run_query(lat, lng, 25000)  # single 25km radius
 
         clinics = []
         for el in elements:
