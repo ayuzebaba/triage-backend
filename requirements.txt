@@ -4,3 +4,4 @@ pydantic==2.12.5
 python-dotenv==1.0.0
 twilio==9.4.1
 supabase==2.31.0
+httpx==0.28.1

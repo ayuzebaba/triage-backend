@@ -10,6 +10,7 @@ from triage_db import (
     find_or_create_by_health_card, get_events_by_session_prefix, link_session_to_patient,
 )
 from patient_login import send_otp, check_otp
+from walkin_clinics import find_nearby_walkin_clinics
 
 app = FastAPI()
 
@@ -719,3 +720,13 @@ def staff_link_patient(payload: LinkPatientRequest):
         return found
     link_result = link_session_to_patient(payload.full_session_id, found["id"])
     return {**link_result, "patient_id": found["id"]}
+
+
+# ── WALK-IN CLINIC SEARCH (severity 5-6) ─────────────────────────────────────
+# Per requirements doc Step 5. Runs server-side — see walkin_clinics.py for
+# why: Overpass's public API doesn't reliably support direct browser (CORS)
+# requests, so the frontend now calls this endpoint instead of calling
+# Overpass itself.
+@app.get("/find-walkin-clinics")
+def find_walkin_clinics_endpoint(lat: float = Query(...), lng: float = Query(...)):
+    return find_nearby_walkin_clinics(lat, lng)
