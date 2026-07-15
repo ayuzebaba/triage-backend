@@ -7,7 +7,7 @@ This runs SERVER-SIDE (backend calling Overpass), not from the browser —
 the original browser-based version hit a CORS block that was never
 actually about request formatting; see below.
 
-TWO separate issues were found and fixed here, not one:
+THREE separate issues were found and fixed here, cumulatively:
 1. CORS: Overpass's public API doesn't reliably send CORS headers for
    arbitrary browser origins, so calling it directly from the browser was
    blocked regardless of formatting. Moving the call server-side (here)
@@ -16,26 +16,37 @@ TWO separate issues were found and fixed here, not one:
    started rejecting requests with generic/missing User-Agent headers
    sometime around April 2026 (confirmed via multiple independent GitHub
    issues on drolbr/Overpass-API and DinoTools/python-overpy, plus OSM
-   community forum threads reporting the identical 406 symptom). Python's
-   httpx sends a generic default User-Agent, which is exactly what's now
-   rejected. Fixed by (a) sending a proper descriptive User-Agent, and
-   (b) using overpass.kumi.systems — a mirror confirmed by multiple
-   sources to not enforce this restriction as aggressively as the primary.
+   community forum threads reporting the identical 406 symptom). Fixed by
+   sending a proper descriptive User-Agent.
+3. Timeouts: even with the User-Agent fix, a single mirror server
+   (overpass.kumi.systems) still timed out in testing — public Overpass
+   instances are individually unreliable (slow, temporarily overloaded, or
+   down). Fixed by trying multiple servers in sequence with a moderate
+   per-server timeout, so one slow/down server only costs a few seconds
+   before falling through to the next, rather than being a single point
+   of failure.
 """
 
 import math
 from urllib.parse import urlencode
 import httpx
 
-# Mirror chosen over the primary (overpass-api.de) specifically because
-# multiple 2026 reports confirm the primary now 406s generic User-Agents
-# far more aggressively than this mirror does.
-OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
+# Multiple public Overpass instances, tried in order. Public Overpass
+# servers are individually known to be unreliable (slow, temporarily down,
+# or newly enforcing stricter policies — as already seen twice: a CORS
+# gap on the primary, then a 406 on the primary, then a timeout on this
+# first mirror). Trying several in sequence, rather than betting entirely
+# on one, is the actual fix — no single public instance can be assumed
+# to always respond quickly.
+OVERPASS_SERVERS = [
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+]
 
 # Overpass's usage policy asks for a descriptive User-Agent identifying
 # the application — not just good practice, but now actively enforced by
-# the primary server (see module docstring). Sent regardless of which
-# server is used, since it's the correct way to call this API either way.
+# at least one server (see module docstring). Sent to every server tried.
 REQUEST_HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
     "User-Agent": "BRISK-Triage-System/1.0 (Brisk Innovation; Saskatchewan patient triage app)",
@@ -69,16 +80,32 @@ def _build_query(lat, lng, radius_meters):
 
 
 def _run_query(lat, lng, radius_meters):
+    """
+    Tries each Overpass server in order, giving each a moderate 8-second
+    timeout. Moving to the next server immediately on any failure (timeout,
+    non-2xx status, connection error) means a single slow/down server
+    delays the response by only ~8s, not the full budget — and as long as
+    ANY of the 3 servers responds, the search succeeds.
+    """
     query = _build_query(lat, lng, radius_meters)
-    with httpx.Client(timeout=20.0) as client:
-        res = client.post(
-            OVERPASS_URL,
-            headers=REQUEST_HEADERS,
-            content=urlencode({"data": query}),
-        )
-        res.raise_for_status()
-        data = res.json()
-        return data.get("elements", [])
+    body = urlencode({"data": query})
+    last_error = None
+
+    for server_url in OVERPASS_SERVERS:
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                res = client.post(server_url, headers=REQUEST_HEADERS, content=body)
+                res.raise_for_status()
+                data = res.json()
+                return data.get("elements", [])
+        except Exception as e:
+            print(f"[walkin_clinics] {server_url} failed: {e}")
+            last_error = e
+            continue
+
+    # All servers failed — raise the last error so the caller's except
+    # block can format a clear message rather than silently returning [].
+    raise last_error if last_error else RuntimeError("All Overpass servers failed")
 
 
 def find_nearby_walkin_clinics(lat: float, lng: float) -> dict:
