@@ -1,10 +1,15 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import os
 from emergency_call import trigger_emergency_call, build_emergency_twiml
+from triage_db import (
+    log_event, create_registration, get_registration,
+    find_or_create_by_health_card, get_events_by_session_prefix, link_session_to_patient,
+)
+from patient_login import send_otp, check_otp
 
 app = FastAPI()
 
@@ -546,3 +551,171 @@ def emergency_call_twiml(
     """
     twiml = build_emergency_twiml(severity, symptom, location)
     return Response(content=twiml, media_type="application/xml")
+
+
+# ── EVENT LOGGING ──────────────────────────────────────────────────────────
+# Per requirements doc Step 1: "The system should be able to keep track of
+# events - DATABASE." Writes to triage_events (see triage_schema.sql).
+class EventLogRequest(BaseModel):
+    session_id: str
+    event_type: str
+    patient_id: Optional[str] = None
+    body_system: Optional[str] = None
+    symptom: Optional[str] = None
+    severity: Optional[int] = None
+    location_region: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@app.post("/log-event")
+def log_event_endpoint(payload: EventLogRequest):
+    """
+    Fire-and-forget event logging, called from the frontend at
+    meaningful moments (card picked, symptom rated, routed to
+    ER/walk-in/911, Twilio call result, location detected/confirmed).
+
+    Never blocks or fails the patient's actual flow — log_event()
+    itself catches all errors internally and returns a status dict
+    rather than raising, so even a Supabase outage can't break
+    anything the patient is doing.
+    """
+    result = log_event(
+        session_id=payload.session_id,
+        event_type=payload.event_type,
+        patient_id=payload.patient_id,
+        body_system=payload.body_system,
+        symptom=payload.symptom,
+        severity=payload.severity,
+        location_region=payload.location_region,
+        metadata=payload.metadata,
+    )
+    return result
+
+
+# ── PATIENT REGISTRATION ──────────────────────────────────────────────────
+# Per requirements doc Section 3. Registration is optional and does NOT
+# require any login/auth — this just stores whichever fields the patient
+# chose to fill in. family_doctor_phone_number is the KEY FIELD, used at
+# the Below-5 severity routing step.
+class RegistrationRequest(BaseModel):
+    full_name: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    phone_number: Optional[str] = None
+    sk_health_card_number: Optional[str] = None
+    home_address: Optional[str] = None
+    email: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    family_doctor_name: Optional[str] = None
+    family_doctor_clinic_name: Optional[str] = None
+    family_doctor_clinic_address: Optional[str] = None
+    family_doctor_phone_number: Optional[str] = None
+    known_allergies: Optional[str] = None
+    current_medications: Optional[str] = None
+
+
+@app.post("/register")
+def register_endpoint(payload: RegistrationRequest):
+    """
+    Creates a triage_registration row from whichever fields the patient
+    filled in. Every field is optional per the requirements doc — no
+    validation forces any of them to be present.
+    """
+    fields = {k: v for k, v in payload.dict().items() if v is not None}
+    return create_registration(fields)
+
+
+@app.get("/registration/{patient_id}")
+def get_registration_endpoint(patient_id: str):
+    """
+    Looks up a saved registration by id — used at the Below-5 routing
+    step to display the patient's saved family doctor phone number.
+    """
+    return get_registration(patient_id)
+
+
+# ── PATIENT LOGIN (health card + OTP) ─────────────────────────────────────
+# This is how a patient proves they're the same person across devices/
+# visits — health card number identifies WHICH patient, OTP confirms they
+# actually own that phone number. Reuses the Twilio Verify pattern already
+# working in EkitiGov, with its own separate Verify Service.
+class RequestOtpRequest(BaseModel):
+    phone_number: str  # E.164 format, e.g. +13068804290
+
+
+@app.post("/patient-login/request-otp")
+def request_otp_endpoint(payload: RequestOtpRequest):
+    return send_otp(payload.phone_number)
+
+
+class VerifyOtpRequest(BaseModel):
+    phone_number: str
+    code: str
+    health_card_number: str
+
+
+@app.post("/patient-login/verify-otp")
+def verify_otp_endpoint(payload: VerifyOtpRequest):
+    """
+    Verifies the OTP, then finds or creates the triage_registration
+    matching this health card number. Returns patient_id on success —
+    the frontend saves this (savePatientId) so future events on this
+    device are linked, same as a normal registration.
+    """
+    otp_result = check_otp(payload.phone_number, payload.code)
+    if otp_result.get("status") != "approved":
+        return {"status": "otp_failed", "detail": otp_result}
+
+    result = find_or_create_by_health_card(
+        payload.health_card_number,
+        extra_fields={"phone_number": payload.phone_number},
+    )
+    return result
+
+
+# ── STAFF-FACING: SESSION LOOKUP & LINKING ────────────────────────────────
+# PLACEHOLDER SECURITY MODEL: a single shared access code (STAFF_ACCESS_CODE
+# env var), not individual staff accounts. This matches the "good enough
+# for now, harden before real deployment" approach already agreed for the
+# health card testing value. Before any real clinical use, this MUST be
+# replaced with real per-staff accounts (e.g. Supabase Auth) — a shared
+# code has no audit trail of which nurse did what.
+STAFF_ACCESS_CODE = os.environ.get("STAFF_ACCESS_CODE", "")
+
+
+def _check_staff_access(access_code: str):
+    if not STAFF_ACCESS_CODE or access_code != STAFF_ACCESS_CODE:
+        raise HTTPException(status_code=403, detail="Invalid staff access code")
+
+
+@app.get("/staff/session-lookup/{session_prefix}")
+def staff_session_lookup(session_prefix: str, access_code: str = Query(...)):
+    """
+    Given the short code a patient shows/scans at the hospital (first 8
+    characters of their session_id), returns that session's logged events
+    so the nurse can review what happened before linking a health card.
+    """
+    _check_staff_access(access_code)
+    return get_events_by_session_prefix(session_prefix)
+
+
+class LinkPatientRequest(BaseModel):
+    full_session_id: str
+    health_card_number: str
+    access_code: str
+
+
+@app.post("/staff/link-patient")
+def staff_link_patient(payload: LinkPatientRequest):
+    """
+    Nurse enters a health card number for a patient who used the app
+    anonymously, then showed up in person. Finds or creates that
+    patient's triage_registration, then retroactively attaches their
+    patient_id to every event from that session.
+    """
+    _check_staff_access(payload.access_code)
+    found = find_or_create_by_health_card(payload.health_card_number)
+    if found.get("status") == "error":
+        return found
+    link_result = link_session_to_patient(payload.full_session_id, found["id"])
+    return {**link_result, "patient_id": found["id"]}
