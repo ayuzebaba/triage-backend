@@ -185,7 +185,7 @@ def get_events_by_session_prefix(session_prefix: str) -> dict:
         result = (
             db.table("triage_events")
             .select("*")
-            .like("session_id", f"{session_prefix}%")
+            .ilike("session_id", f"{session_prefix}%")
             .order("created_at", desc=False)
             .execute()
         )
