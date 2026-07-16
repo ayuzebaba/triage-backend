@@ -41,7 +41,6 @@ import httpx
 OVERPASS_SERVERS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 
 # Overpass's usage policy asks for a descriptive User-Agent identifying
