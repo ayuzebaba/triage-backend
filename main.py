@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 import os
 from emergency_call import trigger_emergency_call, build_emergency_twiml
 from triage_db import (
-    log_event, create_registration, get_registration,
+    log_event, create_registration, get_registration, update_registration,
     find_or_create_by_health_card, get_events_by_session_prefix, link_session_to_patient,
 )
 from patient_login import send_otp, check_otp
@@ -630,9 +630,24 @@ def register_endpoint(payload: RegistrationRequest):
 def get_registration_endpoint(patient_id: str):
     """
     Looks up a saved registration by id — used at the Below-5 routing
-    step to display the patient's saved family doctor phone number.
+    step to display the patient's saved family doctor phone number, and
+    to pre-fill the registration form for an already-logged-in patient.
     """
     return get_registration(patient_id)
+
+
+@app.put("/registration/{patient_id}")
+def update_registration_endpoint(patient_id: str, payload: RegistrationRequest):
+    """
+    Updates an EXISTING patient's registration — this is what the
+    registration form actually calls, not POST /register. A logged-in
+    patient already has a patient_id (created at login via
+    find_or_create_by_health_card); this fills in the rest of their
+    optional profile fields on that SAME row, rather than creating a
+    second, disconnected record.
+    """
+    fields = {k: v for k, v in payload.dict().items() if v is not None}
+    return update_registration(patient_id, fields)
 
 
 # ── PATIENT LOGIN (health card + OTP) ─────────────────────────────────────

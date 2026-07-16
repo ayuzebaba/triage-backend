@@ -115,7 +115,8 @@ def create_registration(fields: Dict[str, Any]) -> dict:
 def get_registration(patient_id: str) -> dict:
     """
     Fetch one patient's registration by id — used to look up their
-    saved family_doctor_phone_number at the Below-5 routing step.
+    saved family_doctor_phone_number at the Below-5 routing step, and
+    to pre-fill the registration form for an already-logged-in patient.
     """
     db = _get_supabase()
     if db is None:
@@ -127,6 +128,29 @@ def get_registration(patient_id: str) -> dict:
         return {"status": "found", "data": result.data[0]}
     except Exception as e:
         print(f"[triage_db] get_registration failed: {e}")
+        return {"status": "error", "reason": str(e)}
+
+
+def update_registration(patient_id: str, fields: Dict[str, Any]) -> dict:
+    """
+    Updates an EXISTING triage_registration row by id. This is what the
+    registration form actually uses for a logged-in patient — NOT
+    create_registration(), which always inserts a new row. Using insert
+    here would create a duplicate record disconnected from the patient's
+    real identity (their health card, already resolved at login via
+    find_or_create_by_health_card), silently splitting one patient's
+    data across two rows.
+    """
+    db = _get_supabase()
+    if db is None:
+        return {"status": "not_configured", "reason": "Supabase env vars not set"}
+    try:
+        result = db.table("triage_registration").update(fields).eq("id", patient_id).execute()
+        if not result.data:
+            return {"status": "error", "reason": "update matched no row"}
+        return {"status": "updated", "data": result.data[0]}
+    except Exception as e:
+        print(f"[triage_db] update_registration failed: {e}")
         return {"status": "error", "reason": str(e)}
 
 
