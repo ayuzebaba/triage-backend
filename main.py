@@ -4,7 +4,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
-from emergency_call import trigger_emergency_call, build_emergency_twiml
+from emergency_call import trigger_emergency_call, build_emergency_twiml, build_911_twiml
 from triage_db import (
     log_event, create_registration, get_registration, update_registration,
     find_or_create_by_health_card, get_events_by_session_prefix, link_session_to_patient,
@@ -560,6 +560,23 @@ def emergency_call_twiml(
     call connected but the instructions for what to say could not be found.
     """
     twiml = build_emergency_twiml(severity, symptom, location)
+    return Response(content=twiml, media_type="application/xml")
+
+
+@app.api_route("/emergency-call-911-twiml", methods=["GET", "POST"])
+def emergency_call_911_twiml(
+    severity: str = Query(...),
+    symptom: str = Query(...),
+    location: str = Query(...),
+):
+    """
+    Twilio fetches this URL when the PARALLEL 911 call connects. Separate
+    from /emergency-call-twiml since the message wording is different —
+    addressed to a professional dispatcher rather than a named clinical
+    contact. Only ever reached if ENABLE_911_AUTODIAL is set to "true" in
+    emergency_call.py (see that module's docstring for the safety rationale).
+    """
+    twiml = build_911_twiml(severity, symptom, location)
     return Response(content=twiml, media_type="application/xml")
 
 
