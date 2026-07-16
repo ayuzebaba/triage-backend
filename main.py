@@ -11,6 +11,7 @@ from triage_db import (
 )
 from patient_login import send_otp, check_otp
 from walkin_clinics import find_nearby_walkin_clinics
+from reverse_geocode import reverse_geocode
 
 app = FastAPI()
 
@@ -504,6 +505,8 @@ class EmergencyCallRequest(BaseModel):
     severity: int
     system_id: Optional[str] = None
     location: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 
 @app.post("/trigger-emergency-call")
@@ -517,19 +520,25 @@ def trigger_emergency_call_endpoint(payload: EmergencyCallRequest):
     Called the instant a patient rates a symptom 10/10 on an emergency-tagged
     card (see INSTANT_911_SYMPTOMS in SystemSelector.js).
 
-    location now comes from SystemSelector.js's real GPS/IP detection
-    (added after this endpoint was first built, when location detection
-    didn't exist yet) — falls back to a clear placeholder only if the
-    frontend genuinely couldn't determine anything.
+    If lat/lng are provided (the app already has this precise GPS data —
+    same accuracy Google Maps would show), they're reverse-geocoded into a
+    real street address and spoken in the call, rather than just naming a
+    city. Falls back to the vague text description only if coordinates
+    aren't available or the geocode lookup fails.
     """
     if payload.severity < 9:
         return {"status": "skipped", "reason": "severity below threshold"}
+
+    if payload.lat is not None and payload.lng is not None:
+        spoken_location = reverse_geocode(payload.lat, payload.lng)
+    else:
+        spoken_location = payload.location or "location unavailable — patient's browser could not determine it"
 
     call_result = trigger_emergency_call(
         session_id=payload.session_id,
         severity=payload.severity,
         symptom=payload.symptom,
-        location=payload.location or "location unavailable — patient's browser could not determine it",
+        location=spoken_location,
     )
     return call_result
 
