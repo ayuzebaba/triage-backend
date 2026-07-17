@@ -55,10 +55,16 @@ ENABLE_911_AUTODIAL = os.environ.get("ENABLE_911_AUTODIAL", "").lower() == "true
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # Simple in-memory guard so the same patient session doesn't trigger
-# multiple calls if severity is re-submitted. For production, replace
-# this with a database-backed check (e.g. a "call_triggered" flag on
-# the patient session record in Supabase/Postgres).
-_already_called_sessions = set()
+# multiple calls for the SAME symptom if severity is re-submitted (e.g. a
+# duplicate render, a double-tap). Tracks (session_id, symptom) pairs, NOT
+# session_id alone -- an earlier version only tracked session_id, which
+# caused a real bug: after the first auto-10 symptom fired a call, EVERY
+# subsequent symptom in that same browsing session was silently blocked,
+# even genuinely different ones (e.g. selecting "Seizure or fitting" after
+# already having triggered a call for "Worst headache of my life"). For
+# production, replace this with a database-backed check (e.g. a
+# "call_triggered" flag on the patient session record in Supabase/Postgres).
+_already_called_session_symptoms = set()
 
 
 def trigger_emergency_call(session_id: str, severity: int, symptom: str,
@@ -71,10 +77,11 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
         never blocks or cancels the other.
 
     Args:
-        session_id: unique identifier for this patient's assessment session,
-                     used to prevent duplicate calls for the same session.
+        session_id: unique identifier for this patient's assessment session.
         severity: the patient's reported/assigned severity (1-10).
-        symptom: short description of the triggering symptom.
+        symptom: short description of the triggering symptom -- combined
+                 with session_id to form the dedup key, so a different
+                 symptom in the same session is NOT blocked.
         location: patient's detected location, if available.
 
     Returns:
@@ -83,8 +90,9 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     if severity < 9:
         return {"status": "skipped", "reason": "severity below threshold"}
 
-    if session_id in _already_called_sessions:
-        return {"status": "skipped", "reason": "call already placed for this session"}
+    dedup_key = (session_id, symptom)
+    if dedup_key in _already_called_session_symptoms:
+        return {"status": "skipped", "reason": "call already placed for this symptom in this session"}
 
     safe_symptom = quote(str(symptom))
     safe_location = quote(str(location))
@@ -94,7 +102,7 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     if ENABLE_911_AUTODIAL:
         call_911_result = _place_911_call(severity, safe_symptom, safe_location)
 
-    _already_called_sessions.add(session_id)
+    _already_called_session_symptoms.add(dedup_key)
 
     return {
         "status": "call_placed",
