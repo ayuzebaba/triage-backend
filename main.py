@@ -37,6 +37,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -- STAFF REPORTS (read-only; isolated module) -------------------------------
+# If reports_api.py is missing or fails to load, the rest of the app still starts.
+try:
+    from reports_api import router as reports_router
+    app.include_router(reports_router)
+except Exception as e:
+    print(f"[main] reports module not loaded: {e}")
+
 class AnswerEntry(BaseModel):
     question: str
     answer: str
