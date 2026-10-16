@@ -10,6 +10,13 @@ from triage_db import (
     find_or_create_by_health_card, get_events_by_session_prefix, link_session_to_patient,
 )
 from patient_login import send_otp, check_otp
+try:
+    from activations_db import link_session_to_patient as link_session_to_patient_activations
+except Exception as _e:  # never let this stop the app from starting
+    print(f"[main] activations_db unavailable: {_e}")
+
+    def link_session_to_patient_activations(*args, **kwargs):
+        return {"status": "not_configured"}
 from walkin_clinics import find_nearby_walkin_clinics
 from reverse_geocode import reverse_geocode
 
@@ -539,6 +546,9 @@ def trigger_emergency_call_endpoint(payload: EmergencyCallRequest):
         severity=payload.severity,
         symptom=payload.symptom,
         location=spoken_location,
+        body_system=payload.system_id,
+        lat=payload.lat,
+        lng=payload.lng,
     )
     return call_result
 
@@ -757,9 +767,14 @@ def staff_link_patient(payload: LinkPatientRequest):
     """
     _check_staff_access(payload.access_code)
     found = find_or_create_by_health_card(payload.health_card_number)
-    if found.get("status") == "error":
-        return found
+    if found.get("status") not in ("found", "created"):
+        return found  # error or not_configured: report it instead of crashing on found["id"]
     link_result = link_session_to_patient(payload.full_session_id, found["id"])
+    # Also attach the patient to this session's emergency activations (audit record).
+    try:
+        link_session_to_patient_activations(payload.full_session_id, found["id"])
+    except Exception as e:
+        print(f"[main] linking activations failed: {e}")
     return {**link_result, "patient_id": found["id"]}
 
 

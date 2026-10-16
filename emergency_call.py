@@ -40,6 +40,19 @@ import os
 from urllib.parse import quote
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
+try:
+    from activations_db import create_activation, add_log, record_call
+except Exception as _activations_import_error:  # never let this stop the app or the call
+    print(f"[emergency_call] activations_db unavailable, records disabled: {_activations_import_error}")
+
+    def create_activation(*args, **kwargs):
+        return {"status": "not_configured"}
+
+    def add_log(*args, **kwargs):
+        return {"status": "not_configured"}
+
+    def record_call(*args, **kwargs):
+        return {"status": "not_configured"}
 
 # --- Twilio client setup -----------------------------------------------
 TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
@@ -68,7 +81,9 @@ _already_called_session_symptoms = set()
 
 
 def trigger_emergency_call(session_id: str, severity: int, symptom: str,
-                            location: str = "location unavailable") -> dict:
+                            location: str = "location unavailable",
+                            body_system=None, lat=None, lng=None,
+                            location_region=None, patient_id=None) -> dict:
     """
     Places outbound call(s) if severity >= 9:
       - Always calls the clinical contact number.
@@ -76,13 +91,22 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
         is set to "true". Each call is independent -- a failure in one
         never blocks or cancels the other.
 
+    Closed-loop step 1: every activation is now written to the database
+    (triage_activations) BEFORE the call is placed. The database row's
+    UNIQUE (session_id, symptom) constraint is the durable duplicate guard.
+    If the database is unreachable the call is STILL placed (the old
+    in-memory guard is used instead) -- a database problem must never
+    stop an emergency call.
+
     Args:
         session_id: unique identifier for this patient's assessment session.
         severity: the patient's reported/assigned severity (1-10).
         symptom: short description of the triggering symptom -- combined
                  with session_id to form the dedup key, so a different
                  symptom in the same session is NOT blocked.
-        location: patient's detected location, if available.
+        location: patient's detected location, if available (spoken text).
+        body_system, lat, lng, location_region, patient_id: optional audit
+                 fields stored on the activation record.
 
     Returns:
         dict with call status info for both calls attempted.
@@ -94,6 +118,34 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     if dedup_key in _already_called_session_symptoms:
         return {"status": "skipped", "reason": "call already placed for this symptom in this session"}
 
+    # Durable guard + audit record. "duplicate" is the only result that stops
+    # the call; created / not_configured / error all go ahead and call.
+    try:
+        activation = create_activation(
+            session_id=session_id,
+            symptom=symptom,
+            severity=severity,
+            body_system=body_system,
+            patient_id=patient_id,
+            latitude=lat,
+            longitude=lng,
+            spoken_location=location,
+            location_region=location_region,
+        )
+    except Exception as e:  # belt and braces: recording must never stop the call
+        print(f"[emergency_call] create_activation raised: {e}")
+        activation = {"status": "error", "reason": str(e)}
+    if activation.get("status") == "duplicate":
+        _already_called_session_symptoms.add(dedup_key)
+        return {"status": "skipped", "reason": "call already placed for this symptom in this session"}
+    activation_id = activation.get("id")  # None if the database was unavailable
+
+    if activation_id:
+        try:
+            add_log(activation_id, "created", {"severity": severity, "symptom": symptom})
+        except Exception as e:
+            print(f"[emergency_call] add_log raised: {e}")
+
     safe_symptom = quote(str(symptom))
     safe_location = quote(str(location))
 
@@ -104,8 +156,25 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
 
     _already_called_session_symptoms.add(dedup_key)
 
+    if activation_id:
+        try:
+            record_call(
+                activation_id,
+                to_number=CLINICAL_CONTACT_NUMBER,
+                level=1,
+                call_sid=clinical_result.get("call_sid"),
+                error=clinical_result.get("reason") if clinical_result.get("status") == "error" else None,
+            )
+            add_log(activation_id, "call_placed" if clinical_result.get("status") == "placed" else "error",
+                    {"level": 1, "result": clinical_result})
+            if call_911_result is not None:
+                add_log(activation_id, "911_logged", {"result": call_911_result})
+        except Exception as e:  # the call is already placed; never fail the response over bookkeeping
+            print(f"[emergency_call] recording call details raised: {e}")
+
     return {
         "status": "call_placed",
+        "activation_id": activation_id,
         "clinical_contact_call": clinical_result,
         "call_911": call_911_result if call_911_result else {"status": "disabled", "reason": "ENABLE_911_AUTODIAL not set to true"},
     }
