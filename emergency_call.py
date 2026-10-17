@@ -37,6 +37,7 @@ the way a patient's own phone/carrier does automatically.
 """
 
 import os
+import secrets
 from urllib.parse import quote
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
@@ -70,6 +71,11 @@ ENABLE_911_AUTODIAL = os.environ.get("ENABLE_911_AUTODIAL", "").lower() == "true
 # completed...) to /twilio/call-status. On by default; set the Railway variable
 # ENABLE_CALL_STATUS_CALLBACKS to "false" to switch it off without a code change.
 ENABLE_CALL_STATUS_CALLBACKS = os.environ.get("ENABLE_CALL_STATUS_CALLBACKS", "true").lower() != "false"
+
+# Closed-loop step 4: "press 1 to acknowledge" on the clinical-contact call. On by
+# default; set the Railway variable ENABLE_PRESS_1_ACK to "false" to go back to the
+# plain spoken message without a code change.
+ENABLE_PRESS_1_ACK = os.environ.get("ENABLE_PRESS_1_ACK", "true").lower() != "false"
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -155,7 +161,11 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     safe_symptom = quote(str(symptom))
     safe_location = quote(str(location))
 
-    clinical_result = _place_clinical_contact_call(severity, safe_symptom, safe_location)
+    # One-time token that ties the call's "press 1" to this call's database row.
+    # Only used when the activation was saved (otherwise there is nothing to acknowledge).
+    ack_token = secrets.token_urlsafe(16) if (ENABLE_PRESS_1_ACK and activation_id) else None
+
+    clinical_result = _place_clinical_contact_call(severity, safe_symptom, safe_location, ack_token)
     call_911_result = None
     if ENABLE_911_AUTODIAL:
         call_911_result = _place_911_call(severity, safe_symptom, safe_location)
@@ -170,6 +180,7 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
                 level=1,
                 call_sid=clinical_result.get("call_sid"),
                 error=clinical_result.get("reason") if clinical_result.get("status") == "error" else None,
+                ack_token=ack_token,
             )
             add_log(activation_id, "call_placed" if clinical_result.get("status") == "placed" else "error",
                     {"level": 1, "result": clinical_result})
@@ -186,7 +197,7 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     }
 
 
-def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location: str) -> dict:
+def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location: str, ack_token=None) -> dict:
     """Places the call to the clinical contact. Never raises -- caught and
     reported as an error status so a failure here doesn't prevent the 911
     call attempt (or vice versa)."""
@@ -195,6 +206,8 @@ def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location
             f"{PUBLIC_BASE_URL}/emergency-call-twiml"
             f"?severity={severity}&symptom={safe_symptom}&location={safe_location}"
         )
+        if ack_token:
+            twiml_url += f"&ack={ack_token}"
         call = None
         if ENABLE_CALL_STATUS_CALLBACKS:
             try:

@@ -53,6 +53,14 @@ try:
 except Exception as e:
     print(f"[main] call status module not loaded: {e}")
 
+# -- PRESS-1 ACKNOWLEDGEMENT (closed-loop step 4; isolated module) -------------
+# If ack_flow.py is missing or fails to load, the call falls back to the plain message.
+try:
+    from ack_flow import router as ack_router
+    app.include_router(ack_router)
+except Exception as e:
+    print(f"[main] acknowledgement module not loaded: {e}")
+
 class AnswerEntry(BaseModel):
     question: str
     answer: str
@@ -574,6 +582,7 @@ def emergency_call_twiml(
     severity: str = Query(...),
     symptom: str = Query(...),
     location: str = Query(...),
+    ack: Optional[str] = Query(None),
 ):
     """
     Twilio fetches this URL the moment the clinical contact answers the
@@ -585,7 +594,17 @@ def emergency_call_twiml(
     generic "An application error has occurred. Goodbye." message, since the
     call connected but the instructions for what to say could not be found.
     """
-    twiml = build_emergency_twiml(severity, symptom, location)
+    twiml = None
+    if ack:
+        # Step 4: "press 1 to acknowledge". Any problem falls back to the plain message.
+        try:
+            from ack_flow import build_ack_twiml
+            twiml = build_ack_twiml(severity, symptom, location, ack)
+        except Exception as e:
+            print(f"[main] press-1 message unavailable, using plain message: {e}")
+            twiml = None
+    if twiml is None:
+        twiml = build_emergency_twiml(severity, symptom, location)
     return Response(content=twiml, media_type="application/xml")
 
 

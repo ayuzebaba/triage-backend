@@ -127,6 +127,7 @@ def record_call(
     contact_name: Optional[str] = None,
     call_sid: Optional[str] = None,
     error: Optional[str] = None,
+    ack_token: Optional[str] = None,
 ) -> dict:
     """
     Records one call attempt. If Twilio rejected the call (error set, no SID)
@@ -148,6 +149,7 @@ def record_call(
             "status_rank": 4 if failed else 1,
             "placed_at": _now_iso(),
             "error": error,
+            "ack_token": ack_token,
         }
         result = db.table("triage_activation_calls").insert(row).execute()
         return {"status": "recorded", "id": result.data[0]["id"] if result.data else None}
