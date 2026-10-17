@@ -14,7 +14,7 @@ Same rules as triage_db.py:
 
 import os
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _client = None
 
@@ -66,6 +66,7 @@ def create_activation(
     longitude: Optional[float] = None,
     spoken_location: Optional[str] = None,
     location_region: Optional[str] = None,
+    next_action_in_seconds: Optional[int] = None,
 ) -> dict:
     """
     Inserts one activation row.
@@ -92,6 +93,10 @@ def create_activation(
             "spoken_location": spoken_location,
             "location_region": location_region,
         }
+        if next_action_in_seconds is not None:
+            # Safety net for the escalation engine (step 5): the activation is already
+            # scheduled even if the server stops before the level-1 call is recorded.
+            row["next_action_at"] = (datetime.now(timezone.utc) + timedelta(seconds=next_action_in_seconds)).isoformat()
         result = db.table("triage_activations").insert(row).execute()
         if not result.data:
             return {"status": "error", "reason": "insert returned no data"}

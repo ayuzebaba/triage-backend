@@ -71,7 +71,7 @@ def _ack_url(token: str, wrong: int = 0) -> str:
 
 # ── TwiML ──────────────────────────────────────────────────────────────────
 
-def build_ack_twiml(severity: str, symptom: str, location: str, token: str) -> str:
+def build_ack_twiml(severity: str, symptom: str, location: str, token: str, level: int = 1) -> str:
     """Spoken alert with 'press 1 to acknowledge'. Pure function, no database."""
     if not token:
         raise ValueError("ack token required")
@@ -80,8 +80,13 @@ def build_ack_twiml(severity: str, symptom: str, location: str, token: str) -> s
 
     g1 = response.gather(input="dtmf", num_digits=1, timeout=GATHER_TIMEOUT_SECONDS,
                          action=action, method="POST")
+    if level and level > 1:
+        opening = ("This is a BRISK Triage System ESCALATED ALERT. "
+                   "The previous contact did not acknowledge. ")
+    else:
+        opening = "This is a BRISK Triage System ALERT from Ayodele in Saskatoon to Dr Obayan in Nipawin. "
     g1.say(
-        f"This is a BRISK Triage System ALERT from Ayodele in Saskatoon to Dr Obayan in Nipawin. "
+        f"{opening}"
         f"A patient has reported an emergency severity of {severity} out of 10, "
         f"with the symptom: {symptom}. "
         f"Approximate patient location: {location}. This location is based on GPS and may be off "
@@ -181,7 +186,7 @@ def record_ack(token: str, call_sid: str) -> str:
                 "updated_at": now,
             })
             .eq("id", row["activation_id"])
-            .eq("status", "active")
+            .in_("status", ["active", "exhausted"])   # a late press after exhaustion still counts
             .execute()
         )
         first_press = bool(upd.data)

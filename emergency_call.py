@@ -56,6 +56,17 @@ except Exception as _activations_import_error:  # never let this stop the app or
     def record_call(*args, **kwargs):
         return {"status": "not_configured"}
 
+try:
+    from escalation import initial_safety_seconds, schedule_after_call
+except Exception as _escalation_import_error:  # escalation is optional; the call never depends on it
+    print(f"[emergency_call] escalation unavailable, no escalation: {_escalation_import_error}")
+
+    def initial_safety_seconds():
+        return None
+
+    def schedule_after_call(*args, **kwargs):
+        return {"status": "not_configured"}
+
 # --- Twilio client setup -----------------------------------------------
 TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
 TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
@@ -133,6 +144,10 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     # Durable guard + audit record. "duplicate" is the only result that stops
     # the call; created / not_configured / error all go ahead and call.
     try:
+        safety_delay = initial_safety_seconds()
+    except Exception:  # escalation must never be able to affect recording or the call
+        safety_delay = None
+    try:
         activation = create_activation(
             session_id=session_id,
             symptom=symptom,
@@ -143,6 +158,7 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
             longitude=lng,
             spoken_location=location,
             location_region=location_region,
+            next_action_in_seconds=safety_delay,
         )
     except Exception as e:  # belt and braces: recording must never stop the call
         print(f"[emergency_call] create_activation raised: {e}")
@@ -186,6 +202,8 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
                     {"level": 1, "result": clinical_result})
             if call_911_result is not None:
                 add_log(activation_id, "911_logged", {"result": call_911_result})
+            # Step 5: tell the escalation engine when to look at this activation next.
+            schedule_after_call(activation_id, 1, clinical_result.get("status") == "placed")
         except Exception as e:  # the call is already placed; never fail the response over bookkeeping
             print(f"[emergency_call] recording call details raised: {e}")
 
@@ -197,7 +215,8 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
     }
 
 
-def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location: str, ack_token=None) -> dict:
+def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location: str, ack_token=None,
+                                 to_number=None, level: int = 1) -> dict:
     """Places the call to the clinical contact. Never raises -- caught and
     reported as an error status so a failure here doesn't prevent the 911
     call attempt (or vice versa)."""
@@ -208,11 +227,14 @@ def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location
         )
         if ack_token:
             twiml_url += f"&ack={ack_token}"
+            if level and level > 1:
+                twiml_url += f"&esc={level}"
+        destination = to_number or CLINICAL_CONTACT_NUMBER
         call = None
         if ENABLE_CALL_STATUS_CALLBACKS:
             try:
                 call = client.calls.create(
-                    to=CLINICAL_CONTACT_NUMBER,
+                    to=destination,
                     from_=TWILIO_PHONE_NUMBER,
                     url=twiml_url,
                     status_callback=f"{PUBLIC_BASE_URL.rstrip('/')}/twilio/call-status",
@@ -231,7 +253,7 @@ def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location
                     raise
         if call is None:
             call = client.calls.create(
-                to=CLINICAL_CONTACT_NUMBER,
+                to=destination,
                 from_=TWILIO_PHONE_NUMBER,
                 url=twiml_url,
             )

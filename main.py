@@ -61,6 +61,14 @@ try:
 except Exception as e:
     print(f"[main] acknowledgement module not loaded: {e}")
 
+# -- ESCALATION ENGINE (closed-loop step 5; background thread) ------------------
+# If escalation.py is missing or fails to start, emergency calls and press-1 still work.
+try:
+    from escalation import start_engine
+    start_engine()
+except Exception as e:
+    print(f"[main] escalation engine not started: {e}")
+
 class AnswerEntry(BaseModel):
     question: str
     answer: str
@@ -583,6 +591,7 @@ def emergency_call_twiml(
     symptom: str = Query(...),
     location: str = Query(...),
     ack: Optional[str] = Query(None),
+    esc: Optional[int] = Query(None),
 ):
     """
     Twilio fetches this URL the moment the clinical contact answers the
@@ -599,7 +608,7 @@ def emergency_call_twiml(
         # Step 4: "press 1 to acknowledge". Any problem falls back to the plain message.
         try:
             from ack_flow import build_ack_twiml
-            twiml = build_ack_twiml(severity, symptom, location, ack)
+            twiml = build_ack_twiml(severity, symptom, location, ack, level=esc or 1)
         except Exception as e:
             print(f"[main] press-1 message unavailable, using plain message: {e}")
             twiml = None
