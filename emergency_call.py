@@ -39,6 +39,7 @@ the way a patient's own phone/carrier does automatically.
 import os
 from urllib.parse import quote
 from twilio.rest import Client
+from twilio.base.exceptions import TwilioRestException
 from twilio.twiml.voice_response import VoiceResponse
 try:
     from activations_db import create_activation, add_log, record_call
@@ -64,6 +65,11 @@ PUBLIC_BASE_URL = os.environ["PUBLIC_BASE_URL"]
 # Safety gate for the 911 parallel call -- defaults OFF. Must be explicitly
 # set to the string "true" in Railway to activate. See module docstring.
 ENABLE_911_AUTODIAL = os.environ.get("ENABLE_911_AUTODIAL", "").lower() == "true"
+
+# Closed-loop step 3: ask Twilio to report call progress (ringing, answered,
+# completed...) to /twilio/call-status. On by default; set the Railway variable
+# ENABLE_CALL_STATUS_CALLBACKS to "false" to switch it off without a code change.
+ENABLE_CALL_STATUS_CALLBACKS = os.environ.get("ENABLE_CALL_STATUS_CALLBACKS", "true").lower() != "false"
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
@@ -189,11 +195,33 @@ def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location
             f"{PUBLIC_BASE_URL}/emergency-call-twiml"
             f"?severity={severity}&symptom={safe_symptom}&location={safe_location}"
         )
-        call = client.calls.create(
-            to=CLINICAL_CONTACT_NUMBER,
-            from_=TWILIO_PHONE_NUMBER,
-            url=twiml_url,
-        )
+        call = None
+        if ENABLE_CALL_STATUS_CALLBACKS:
+            try:
+                call = client.calls.create(
+                    to=CLINICAL_CONTACT_NUMBER,
+                    from_=TWILIO_PHONE_NUMBER,
+                    url=twiml_url,
+                    status_callback=f"{PUBLIC_BASE_URL.rstrip('/')}/twilio/call-status",
+                    status_callback_method="POST",
+                    status_callback_event=["initiated", "ringing", "answered", "completed"],
+                )
+            except TwilioRestException as e:
+                # A 4xx means Twilio refused the request, so no call was created.
+                # Retry once WITHOUT the status callback so the emergency call
+                # still goes out. Any other failure falls through to the handler
+                # below, exactly as before (no blind retry that could double-call).
+                if e.status is not None and 400 <= e.status < 500:
+                    print(f"[emergency_call] status callback rejected ({e.status}); retrying without it: {e}")
+                    call = None
+                else:
+                    raise
+        if call is None:
+            call = client.calls.create(
+                to=CLINICAL_CONTACT_NUMBER,
+                from_=TWILIO_PHONE_NUMBER,
+                url=twiml_url,
+            )
         return {"status": "placed", "call_sid": call.sid}
     except Exception as e:
         print(f"[emergency_call] Clinical contact call failed: {e}")
