@@ -61,6 +61,14 @@ try:
 except Exception as e:
     print(f"[main] acknowledgement module not loaded: {e}")
 
+# -- STAFF ACTIVATIONS (closed-loop step 7; isolated module) -------------------
+# If staff_activations.py is missing or fails to load, the rest of the app still starts.
+try:
+    from staff_activations import router as staff_activations_router
+    app.include_router(staff_activations_router)
+except Exception as e:
+    print(f"[main] staff activations module not loaded: {e}")
+
 # -- ESCALATION ENGINE (closed-loop step 5; background thread) ------------------
 # If escalation.py is missing or fails to start, emergency calls and press-1 still work.
 try:
