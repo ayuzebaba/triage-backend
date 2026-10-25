@@ -53,6 +53,14 @@ try:
 except Exception as e:
     print(f"[main] call status module not loaded: {e}")
 
+# -- VOICEMAIL DETECTION (closed-loop step 9; isolated module, record-only) ----
+# If answering_machine.py is missing or fails to load, calls and everything else still work.
+try:
+    from answering_machine import router as amd_router
+    app.include_router(amd_router)
+except Exception as e:
+    print(f"[main] voicemail detection module not loaded: {e}")
+
 # -- PRESS-1 ACKNOWLEDGEMENT (closed-loop step 4; isolated module) -------------
 # If ack_flow.py is missing or fails to load, the call falls back to the plain message.
 try:
@@ -527,6 +535,14 @@ def triage(symptom: SymptomInput):
     the original branching logic above had to be touched.
     """
     result = _triage_logic(symptom)
+
+    # -- AI shadow mode (step 10): advisory only, runs in the background, never raises --
+    # Does nothing unless ENABLE_AI_SHADOW=true and AI_API_KEY are set in Railway.
+    try:
+        import ai_assist
+        ai_assist.observe(symptom, result, list(SYMPTOM_KEYWORDS.keys()))
+    except Exception as e:
+        print(f"[main] ai assist skipped: {e}")
 
     if result.get("red_flag") and result.get("risk_level") == "high":
         session_id = symptom.session_id or "anonymous-session"
