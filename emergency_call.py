@@ -110,7 +110,7 @@ _already_called_session_symptoms = set()
 def trigger_emergency_call(session_id: str, severity: int, symptom: str,
                             location: str = "location unavailable",
                             body_system=None, lat=None, lng=None,
-                            location_region=None, patient_id=None) -> dict:
+                            location_region=None, patient_id=None, extra=None) -> dict:
     """
     Places outbound call(s) if severity >= 9:
       - Always calls the clinical contact number.
@@ -134,6 +134,10 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
         location: patient's detected location, if available (spoken text).
         body_system, lat, lng, location_region, patient_id: optional audit
                  fields stored on the activation record.
+        extra: optional dict of extra columns saved on the activation row BEFORE
+                 the call is placed (used by the bystander alert: reported_via,
+                 observation_codes, note, callback_number, ...). A failure to
+                 save it never stops the call.
 
     Returns:
         dict with call status info for both calls attempted.
@@ -171,6 +175,9 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
         _already_called_session_symptoms.add(dedup_key)
         return {"status": "skipped", "reason": "call already placed for this symptom in this session"}
     activation_id = activation.get("id")  # None if the database was unavailable
+
+    if activation_id and extra:
+        _store_extra(activation_id, extra)
 
     if activation_id:
         try:
@@ -217,6 +224,17 @@ def trigger_emergency_call(session_id: str, severity: int, symptom: str,
         "clinical_contact_call": clinical_result,
         "call_911": call_911_result if call_911_result else {"status": "disabled", "reason": "ENABLE_911_AUTODIAL not set to true"},
     }
+
+
+def _store_extra(activation_id, extra: dict):
+    """Saves extra columns on the activation row. Never raises."""
+    try:
+        from activations_db import _get_supabase
+        db = _get_supabase()
+        if db is not None:
+            db.table("triage_activations").update(extra).eq("id", activation_id).execute()
+    except Exception as e:
+        print(f"[emergency_call] could not save extra activation fields: {e}")
 
 
 def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location: str, ack_token=None,

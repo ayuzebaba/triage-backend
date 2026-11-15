@@ -70,6 +70,15 @@ try:
 except Exception as e:
     print(f"[main] admin module not loaded: {e}")
 
+# -- BYSTANDER HELP ALERT (release A; isolated module) -------------------------
+# If help_alert.py is missing or fails to load, the rest of the app still starts.
+# Off until the Railway variable ENABLE_HELP_ALERT is set to "true".
+try:
+    from help_alert import router as help_alert_router
+    app.include_router(help_alert_router)
+except Exception as e:
+    print(f"[main] help alert module not loaded: {e}")
+
 # -- PRESS-1 ACKNOWLEDGEMENT (closed-loop step 4; isolated module) -------------
 # If ack_flow.py is missing or fails to load, the call falls back to the plain message.
 try:
@@ -637,6 +646,17 @@ def emergency_call_twiml(
     call connected but the instructions for what to say could not be found.
     """
     twiml = None
+    if ack:
+        # Release A: for a bystander report, add the callback number to the spoken
+        # location (so it is said in the message and again in the repeat). The number is
+        # looked up here from the database; it is never in the URL. Any problem: skip it.
+        try:
+            from help_alert import callback_speech
+            extra_say = callback_speech(ack)
+            if extra_say:
+                location = f"{location}. {extra_say}"
+        except Exception as e:
+            print(f"[main] callback number not added: {e}")
     if ack:
         # Step 4: "press 1 to acknowledge". Any problem falls back to the plain message.
         try:
