@@ -272,6 +272,12 @@ def help_alert(payload: HelpAlertRequest, request: Request):
         result = trigger_emergency_call(session_id=session_id, severity=severity, symptom=symptom,
                                         location=location, body_system="bystander",
                                         lat=payload.lat, lng=payload.lng, extra=extra)
+        # Only say "alerted" if a call really went out (or this same report was already alerted).
+        placed = result.get("status") == "call_placed"
+        repeat = result.get("status") == "skipped" and "already placed" in str(result.get("reason", ""))
+        if not (placed or repeat):
+            print(f"[help_alert] no call placed: {result}")
+            return {"status": "not_called", "show_911": True}
         return {"status": "alerted", "show_911": True, "code": _code(session_id),
                 "number_ignored": number_ignored, "call": result.get("status")}
     except Exception as e:
