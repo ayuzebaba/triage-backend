@@ -194,6 +194,32 @@ def _find_open_nearby(db, lat, lng, window_min: int, dist_m: int) -> Optional[di
     return None
 
 
+# ── location ───────────────────────────────────────────────────────────────
+
+def _geocode(lat, lng) -> str:
+    """Street address for GPS coordinates, '' if none. Never raises."""
+    try:
+        if lat is None or lng is None or not (-90 <= float(lat) <= 90 and -180 <= float(lng) <= 180):
+            return ""
+        from reverse_geocode import reverse_geocode
+        return str(reverse_geocode(float(lat), float(lng)) or "").strip()
+    except Exception as e:
+        print(f"[help_alert] reverse geocode failed: {e}")
+        return ""
+
+
+@router.get("/help-locate")
+def help_locate(request: Request, lat: float, lng: float):
+    """Lets the /help page show 'We think you are near ...'. Never raises; '' if unknown."""
+    try:
+        if not enabled() or _rate_limited("locate:" + _client_ip(request), 30):
+            return {"address": ""}
+        return {"address": _geocode(lat, lng)}
+    except Exception as e:
+        print(f"[help_alert] /help-locate failed: {e}")
+        return {"address": ""}
+
+
 # ── the alert ──────────────────────────────────────────────────────────────
 
 class HelpAlertRequest(BaseModel):
@@ -243,15 +269,17 @@ def help_alert(payload: HelpAlertRequest, request: Request):
         is_test = bool(os.environ.get("HELP_ALERT_TEST_CODE")) and payload.test_code == os.environ.get("HELP_ALERT_TEST_CODE")
         session_id = (payload.session_id or "").strip()[:64] or f"help-{secrets.token_hex(6)}"
 
-        location = (payload.location or "").strip()[:LOCATION_MAX]
-        if not location and payload.lat is not None and payload.lng is not None:
-            try:
-                from reverse_geocode import reverse_geocode
-                location = reverse_geocode(payload.lat, payload.lng) or ""
-            except Exception as e:
-                print(f"[help_alert] reverse geocode failed: {e}")
-        if not location:
-            location = "location unavailable"
+        # Where is it? What the caller typed, the GPS address, both, or neither. The call says which.
+        typed = (payload.location or "").strip()[:LOCATION_MAX]
+        gps_addr = _geocode(payload.lat, payload.lng)
+        if typed and gps_addr:
+            location, location_source = f"{typed}. GPS places the phone near {gps_addr}", "typed+gps"
+        elif typed:
+            location, location_source = typed, "typed"
+        elif gps_addr:
+            location, location_source = gps_addr, "gps"
+        else:
+            location, location_source = "location unavailable", "none"
 
         if db is not None:
             near = _find_open_nearby(db, payload.lat, payload.lng,
@@ -263,7 +291,8 @@ def help_alert(payload: HelpAlertRequest, request: Request):
 
         symptom = ("TEST: " if is_test else "") + "Bystander report: " + (", ".join(labels) if labels else "other")
         extra = {"reported_via": "bystander", "observation_codes": ",".join(codes) or None, "note": note,
-                 "callback_number": number, "callback_unverified": True, "is_test": is_test}
+                 "callback_number": number, "callback_unverified": True, "is_test": is_test,
+                 "location_source": location_source}
 
         from emergency_call import trigger_emergency_call   # lazy: reads Twilio settings
         result = trigger_emergency_call(session_id=session_id, severity=severity, symptom=symptom,
@@ -284,26 +313,41 @@ def help_alert(payload: HelpAlertRequest, request: Request):
 
 # ── used by the call script (main.py /emergency-call-twiml) ────────────────
 
-def callback_speech(ack_token: Optional[str]) -> str:
-    """Spoken callback sentence for the call tied to ack_token, '' for non-bystander cases. Never raises."""
+LOCATION_NOTES = {
+    "gps": "This location is based on GPS and may be off by a house or two. Please confirm with the caller.",
+    "typed": "This location was typed in by the caller. Please confirm with the caller.",
+    "typed+gps": "The street was typed in by the caller. The GPS part may be off by a house or two. Please confirm with the caller.",
+    "none": "No location was given.",
+}
+
+
+def call_extras(ack_token: Optional[str]):
+    """(callback sentence, location note) for the call tied to ack_token; ('', '') for non-bystander cases.
+    Never raises."""
     try:
         if not ack_token:
-            return ""
+            return "", ""
         db = _get_supabase()
         if db is None:
-            return ""
+            return "", ""
         call = db.table("triage_activation_calls").select("activation_id").eq("ack_token", ack_token).limit(1).execute()
         if not call.data:
-            return ""
-        act = (db.table("triage_activations").select("reported_via,callback_number")
+            return "", ""
+        act = (db.table("triage_activations").select("reported_via,callback_number,location_source")
                .eq("id", call.data[0]["activation_id"]).limit(1).execute())
         if not act.data or act.data[0].get("reported_via") != "bystander":
-            return ""
+            return "", ""
         number = act.data[0].get("callback_number")
-        if not number:
-            return NO_NUMBER_TEXT
-        template = str(_setting(db, "voice_template", DEFAULT_TEMPLATE))
-        return template.replace("{number}", spoken_number(number))
+        if number:
+            sentence = str(_setting(db, "voice_template", DEFAULT_TEMPLATE)).replace("{number}", spoken_number(number))
+        else:
+            sentence = NO_NUMBER_TEXT
+        return sentence, LOCATION_NOTES.get(act.data[0].get("location_source") or "", "")
     except Exception as e:
-        print(f"[help_alert] callback_speech failed: {e}")
-        return ""
+        print(f"[help_alert] call_extras failed: {e}")
+        return "", ""
+
+
+def callback_speech(ack_token: Optional[str]) -> str:
+    """Just the callback sentence (kept for older callers). Never raises."""
+    return call_extras(ack_token)[0]

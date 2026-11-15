@@ -646,22 +646,22 @@ def emergency_call_twiml(
     call connected but the instructions for what to say could not be found.
     """
     twiml = None
+    extra_say, loc_note = "", ""
     if ack:
-        # Release A: for a bystander report, add the callback number to the spoken
-        # location (so it is said in the message and again in the repeat). The number is
-        # looked up here from the database; it is never in the URL. Any problem: skip it.
+        # Release A: for a bystander report, the callback number and where the location
+        # came from are looked up here from the database (never in the URL).
+        # Any problem: the standard message is used.
         try:
-            from help_alert import callback_speech
-            extra_say = callback_speech(ack)
-            if extra_say:
-                location = f"{location}. {extra_say}"
+            from help_alert import call_extras
+            extra_say, loc_note = call_extras(ack)
         except Exception as e:
-            print(f"[main] callback number not added: {e}")
+            print(f"[main] bystander call details not added: {e}")
     if ack:
         # Step 4: "press 1 to acknowledge". Any problem falls back to the plain message.
         try:
             from ack_flow import build_ack_twiml
-            twiml = build_ack_twiml(severity, symptom, location, ack, level=esc or 1)
+            twiml = build_ack_twiml(severity, symptom, location, ack, level=esc or 1,
+                                    location_note=loc_note or None, extra_text=extra_say or None)
         except Exception as e:
             print(f"[main] press-1 message unavailable, using plain message: {e}")
             twiml = None

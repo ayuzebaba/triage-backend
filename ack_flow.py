@@ -71,11 +71,16 @@ def _ack_url(token: str, wrong: int = 0) -> str:
 
 # ── TwiML ──────────────────────────────────────────────────────────────────
 
-def build_ack_twiml(severity: str, symptom: str, location: str, token: str, level: int = 1) -> str:
-    """Spoken alert with 'press 1 to acknowledge'. Pure function, no database."""
+def build_ack_twiml(severity: str, symptom: str, location: str, token: str, level: int = 1,
+                    location_note: Optional[str] = None, extra_text: Optional[str] = None) -> str:
+    """Spoken alert with 'press 1 to acknowledge'. Pure function, no database.
+    location_note replaces the standard GPS sentence (bystander reports); extra_text is added
+    after the location (the callback number). Both default to the original wording."""
     if not token:
         raise ValueError("ack token required")
     action = _ack_url(token)
+    where_note = location_note or ("This location is based on GPS and may be off "
+                                   "by a house or two, please confirm with the patient if possible.")
     response = VoiceResponse()
 
     g1 = response.gather(input="dtmf", num_digits=1, timeout=GATHER_TIMEOUT_SECONDS,
@@ -89,8 +94,8 @@ def build_ack_twiml(severity: str, symptom: str, location: str, token: str, leve
         f"{opening}"
         f"A patient has reported an emergency severity of {severity} out of 10, "
         f"with the symptom: {symptom}. "
-        f"Approximate patient location: {location}. This location is based on GPS and may be off "
-        f"by a house or two, please confirm with the patient if possible. "
+        f"Approximate patient location: {location}. {where_note} "
+        f"{(extra_text + ' ') if extra_text else ''}"
         f"Please respond immediately. "
         f"To acknowledge this alert, press 1 now.",
         voice="alice",
