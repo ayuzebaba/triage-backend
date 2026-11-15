@@ -50,10 +50,8 @@ router = APIRouter()
 NOTE_MAX = 300
 LOCATION_MAX = 200
 
-# Used only if the table cannot be read. Same codes as the seed SQL.
+# Used only if the table cannot be read. Same buttons as the live table (unresponsive, not_breathing and other are switched off).
 FALLBACK_OBSERVATIONS = {
-    "unresponsive": ("Not responding or unconscious", 10, True, True),
-    "not_breathing": ("Not breathing normally", 10, True, True),
     "choking": ("Choking", 10, True, True),
     "heavy_bleeding": ("Heavy bleeding that won't stop", 10, True, True),
     "seizure": ("Seizure or shaking", 9, True, True),
@@ -62,7 +60,6 @@ FALLBACK_OBSERVATIONS = {
     "stroke_signs": ("Face drooping, slurred speech, or one side weak", 9, True, True),
     "crash_injury": ("Crash, serious fall or injury", 9, True, True),
     "awake_talking": ("Awake and talking, can answer questions", 0, False, False),
-    "other": ("Other", 9, False, True),
 }
 
 DEFAULT_TEMPLATE = "Caller's number is {number}. I repeat, {number}."
@@ -236,7 +233,7 @@ def help_alert(payload: HelpAlertRequest, request: Request):
         if codes and all(o.get("auto_fire") is False for o in chosen) and not note:
             return {"status": "no_alert", "show_911": False}   # e.g. only "awake and talking"
         if not codes and note:
-            chosen = [obs["other"]] if "other" in obs else []
+            chosen = [obs["other"]] if "other" in obs else []   # no "other" button: typed-only report is severity 9 below
         severity = max([int(o.get("severity") or 0) for o in chosen] or [9])
         labels = [o["label"] for o in chosen]
 
