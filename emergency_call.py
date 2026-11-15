@@ -88,6 +88,10 @@ ENABLE_CALL_STATUS_CALLBACKS = os.environ.get("ENABLE_CALL_STATUS_CALLBACKS", "t
 # plain spoken message without a code change.
 ENABLE_PRESS_1_ACK = os.environ.get("ENABLE_PRESS_1_ACK", "true").lower() != "false"
 
+# Step 9: ask Twilio to tell a person from a voicemail (asynchronous, so the call is not
+# delayed). Record-only. Set the Railway variable ENABLE_VOICEMAIL_DETECTION to "false" to turn it off.
+ENABLE_VOICEMAIL_DETECTION = os.environ.get("ENABLE_VOICEMAIL_DETECTION", "true").lower() != "false"
+
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # Simple in-memory guard so the same patient session doesn't trigger
@@ -230,33 +234,37 @@ def _place_clinical_contact_call(severity: int, safe_symptom: str, safe_location
             if level and level > 1:
                 twiml_url += f"&esc={level}"
         destination = to_number or CLINICAL_CONTACT_NUMBER
-        call = None
+        base = {"to": destination, "from_": TWILIO_PHONE_NUMBER, "url": twiml_url}
+        status_kw = {
+            "status_callback": f"{PUBLIC_BASE_URL.rstrip('/')}/twilio/call-status",
+            "status_callback_method": "POST",
+            "status_callback_event": ["initiated", "ringing", "answered", "completed"],
+        }
+        amd_kw = {
+            "machine_detection": "Enable",
+            "async_amd": "true",
+            "async_amd_status_callback": f"{PUBLIC_BASE_URL.rstrip('/')}/twilio/amd",
+            "async_amd_status_callback_method": "POST",
+        }
+        # Most-featured request first. If Twilio REFUSES it (a 4xx means no call was created),
+        # fall back to the next simpler one, so the emergency call always goes out.
+        # Any other failure is raised straight away (no blind retry that could double-call).
+        attempts = []
+        if ENABLE_CALL_STATUS_CALLBACKS and ENABLE_VOICEMAIL_DETECTION:
+            attempts.append({**base, **status_kw, **amd_kw})
         if ENABLE_CALL_STATUS_CALLBACKS:
+            attempts.append({**base, **status_kw})
+        attempts.append(base)
+        call = None
+        for i, kw in enumerate(attempts):
             try:
-                call = client.calls.create(
-                    to=destination,
-                    from_=TWILIO_PHONE_NUMBER,
-                    url=twiml_url,
-                    status_callback=f"{PUBLIC_BASE_URL.rstrip('/')}/twilio/call-status",
-                    status_callback_method="POST",
-                    status_callback_event=["initiated", "ringing", "answered", "completed"],
-                )
+                call = client.calls.create(**kw)
+                break
             except TwilioRestException as e:
-                # A 4xx means Twilio refused the request, so no call was created.
-                # Retry once WITHOUT the status callback so the emergency call
-                # still goes out. Any other failure falls through to the handler
-                # below, exactly as before (no blind retry that could double-call).
-                if e.status is not None and 400 <= e.status < 500:
-                    print(f"[emergency_call] status callback rejected ({e.status}); retrying without it: {e}")
-                    call = None
-                else:
-                    raise
-        if call is None:
-            call = client.calls.create(
-                to=destination,
-                from_=TWILIO_PHONE_NUMBER,
-                url=twiml_url,
-            )
+                if i < len(attempts) - 1 and e.status is not None and 400 <= e.status < 500:
+                    print(f"[emergency_call] extra call options rejected ({e.status}); retrying with fewer: {e}")
+                    continue
+                raise
         return {"status": "placed", "call_sid": call.sid}
     except Exception as e:
         print(f"[emergency_call] Clinical contact call failed: {e}")
