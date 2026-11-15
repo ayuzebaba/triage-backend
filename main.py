@@ -61,6 +61,15 @@ try:
 except Exception as e:
     print(f"[main] voicemail detection module not loaded: {e}")
 
+# -- ADMIN SETTINGS (release 0a; isolated module) ------------------------------
+# If admin_api.py is missing or fails to load, the rest of the app still starts.
+# Needs the Railway variable ADMIN_ACCESS_CODE. Kill switch: ENABLE_ADMIN = "false".
+try:
+    from admin_api import router as admin_router
+    app.include_router(admin_router)
+except Exception as e:
+    print(f"[main] admin module not loaded: {e}")
+
 # -- PRESS-1 ACKNOWLEDGEMENT (closed-loop step 4; isolated module) -------------
 # If ack_flow.py is missing or fails to load, the call falls back to the plain message.
 try:
