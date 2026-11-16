@@ -4,7 +4,7 @@ BRISK Staff Activations API (closed-loop emergency response, step 7)
 For clinic staff: see emergencies that need attention, take ownership, and
 record the outcome.
 
-  GET  /staff/activations?view=open|closed|all   list (needs-attention first)
+  GET  /staff/activations?view=open|closed|all[&hide_tests=true]   list (needs-attention first)
   GET  /staff/activations/{id}                    one activation + calls + timeline
   POST /staff/activations/{id}/acknowledge        "I'm handling this"  (staff name required)
   POST /staff/activations/{id}/close              record the outcome   (staff name + outcome required)
@@ -19,6 +19,8 @@ Rules
 - Patient identity is never returned: only a yes/no "health card linked" flag,
   the short session code staff already use on the Staff page, and the spoken
   location (staff need it to act).
+- Bystander cases also return the caller's callback number, note and tapped buttons
+  (staff-only, behind the staff code, marked unverified).
 - Never raises out of an endpoint: a database problem returns {"status": "error"}.
 - Own lazy Supabase client via activations_db, same as the other modules.
 """
@@ -58,7 +60,9 @@ OPEN_STATUSES = ["active", "acknowledged", "exhausted"]
 PRIORITY = {"exhausted": 0, "active": 1, "acknowledged": 2, "closed": 3}
 LIST_COLS = ("id,session_id,triggered_at,symptom,severity,body_system,status,current_level,"
              "spoken_location,patient_id,acknowledged_at,acknowledged_via,acknowledged_by,"
-             "exhausted_at,closed_at,disposition,disposition_by,notes")
+             "exhausted_at,closed_at,disposition,disposition_by,notes,"
+             "reported_via,observation_codes,note,callback_number,callback_unverified,"
+             "is_test,location_source")
 CALL_COLS = "activation_id,level,contact_name,status,placed_at,answered_at,ended_at,ack_at"
 SAFE_DETAIL_KEYS = ("level", "status", "contact", "via", "by", "duration_seconds", "disposition", "levels_tried")
 PAGE = 1000
@@ -81,8 +85,31 @@ def _mask_who(value: Optional[str]) -> Optional[str]:
     return value
 
 
-def _clean_activation(a: Dict[str, Any]) -> Dict[str, Any]:
+def _observation_labels(db) -> Dict[str, str]:
+    """code -> button label, so staff see the words the bystander tapped. Never raises."""
+    try:
+        rows = db.table("triage_observations").select("code,label").execute().data or []
+        return {r["code"]: r["label"] for r in rows if r.get("code")}
+    except Exception as e:
+        print(f"[staff_activations] observation labels unavailable: {e}")
+        return {}
+
+
+def _clean_activation(a: Dict[str, Any], labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    labels = labels or {}
+    codes = a.get("observation_codes") or []
+    if not isinstance(codes, list):
+        codes = []
+    bystander = a.get("reported_via") == "bystander"
     return {
+        "reported_via": a.get("reported_via"),
+        "is_test": bool(a.get("is_test")),
+        "location_source": a.get("location_source"),
+        # Bystander extras: shown to staff only (this endpoint needs the staff code).
+        "observations": [labels.get(c) or str(c).replace("_", " ").capitalize() for c in codes] if bystander else [],
+        "bystander_note": (a.get("note") or None) if bystander else None,
+        "callback_number": (a.get("callback_number") or None) if bystander else None,
+        "callback_unverified": bool(a.get("callback_unverified")) if bystander else False,
         "id": a.get("id"),
         "session_code": (a.get("session_id") or "")[:8].upper(),
         "triggered_at": a.get("triggered_at"),
@@ -140,6 +167,7 @@ def _clean_name(name: str) -> str:
 @router.get("/staff/activations")
 def list_activations(
     view: str = Query("open"),
+    hide_tests: bool = Query(False),
     limit: int = Query(100, ge=1, le=300),
     x_staff_access_code: Optional[str] = Header(default=None),
 ):
@@ -159,6 +187,9 @@ def list_activations(
             return b.order("triggered_at", desc=True)
 
         rows = q().limit(limit).execute().data or []
+        if hide_tests:
+            rows = [r for r in rows if not r.get("is_test")]
+        labels = _observation_labels(db)
         ids = [r["id"] for r in rows if r.get("id")]
         calls: List[Dict[str, Any]] = []
         for i in range(0, len(ids), 100):
@@ -173,7 +204,7 @@ def list_activations(
 
         items = []
         for r in rows:
-            item = _clean_activation(r)
+            item = _clean_activation(r, labels)
             item["calls"] = by_act.get(r["id"], [])
             items.append(item)
         # needs-attention first, newest first within each group (stable sort keeps newest-first order)
@@ -210,7 +241,7 @@ def activation_detail(activation_id: str, x_staff_access_code: Optional[str] = H
                 "at": ev.get("created_at"),
                 "detail": {k: detail[k] for k in SAFE_DETAIL_KEYS if k in detail},
             })
-        return {"status": "ok", "activation": _clean_activation(res.data[0]),
+        return {"status": "ok", "activation": _clean_activation(res.data[0], _observation_labels(db)),
                 "calls": [_clean_call(c) for c in calls], "timeline": timeline}
     except HTTPException:
         raise
